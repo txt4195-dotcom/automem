@@ -14,7 +14,7 @@
 
 # **AI Memory That Actually Learns**
 
-AutoMem is a **production-grade long-term memory system** for AI assistants, achieving **90.53% accuracy** on the [LoCoMo benchmark](docs/TESTING.md#locomo-benchmark) (ACL 2024)—outperforming CORE (88.24%).
+AutoMem is a **production-grade long-term memory system** for AI assistants with transparent [LoCoMo benchmark](docs/TESTING.md#locomo-benchmark) baselines (ACL 2024): **89.27%** on `locomo-mini` categories 1-4 with category 5 skipped, and **87.56%** on full `locomo` with the opt-in category-5 judge enabled. See [`benchmarks/EXPERIMENT_LOG.md`](benchmarks/EXPERIMENT_LOG.md) for methodology and current baselines.
 
 **Deploy in 60 seconds:**
 
@@ -60,7 +60,7 @@ This dual architecture lets you ask questions like "why did we choose PostgreSQL
 
 - 🧠 **Store** memories with metadata, importance scores, and temporal context
 - 🔍 **Recall** via hybrid search combining semantic, keyword, graph, and temporal signals
-- 🔗 **Connect** memories with 11 typed relationships (RELATES_TO, LEADS_TO, CONTRADICTS, etc.)
+- 🔗 **Connect** memories with 11 authorable relationship types, plus system-generated semantic and temporal edges
 - 🎯 **Learn** through automatic entity extraction, pattern detection, and consolidation
 - ⚡ **Perform** with sub-100ms recall across thousands of memories
 
@@ -329,7 +329,7 @@ Every memory gets automatically enhanced in the background (doesn't block your A
 
 - See [Memory Consolidation](#memory-consolidation) section above
 
-### 11 Relationship Types
+### 11 Authorable Relationship Types
 
 Build rich knowledge graphs:
 
@@ -346,6 +346,12 @@ Build rich knowledge graphs:
 | `EVOLVED_INTO`    | Knowledge evolution    | Initial design → Final design |
 | `DERIVED_FROM`    | Source tracking        | Implementation → Spec         |
 | `PART_OF`         | Hierarchical structure | Feature → Epic                |
+
+System-generated relationship types:
+
+- `SIMILAR_TO` - Semantic neighbors created by enrichment
+- `PRECEDED_BY` - Temporal links created by enrichment
+- `DISCOVERED` - Internal heuristic edges created by consolidation (`kind=explains|shares_theme|parallel_context`)
 
 ## Quick Start
 
@@ -522,7 +528,7 @@ Vector databases match embeddings. AutoMem builds knowledge graphs:
 
 AutoMem saves you months of iteration:
 
-- ✅ **Benchmark-proven** - 90.53% on LoCoMo (ACL 2024)
+- ✅ **Benchmark-proven** - Transparent LoCoMo baselines for both judge-off and judge-on evaluation
 - ✅ **Research-validated** - Implements HippoRAG 2, A-MEM, MELODI, ReadAgent principles
 - ✅ **Production-ready** - Auth, admin tools, health monitoring, automated backups
 - ✅ **Battle-tested** - Enrichment pipeline, consolidation engine, retry logic, dual storage
@@ -532,24 +538,35 @@ AutoMem saves you months of iteration:
 
 ### LoCoMo Benchmark (ACL 2024)
 
-**90.53% overall accuracy** across 1,986 questions:
+AutoMem publishes two reference baselines with Voyage 4 embeddings:
+
+| Setup | Scope | Score | Notes |
+|-------|-------|-------|-------|
+| Fast iteration | `locomo-mini`, judge off | **89.27% (208/233)** | Categories 1-4 only; 71 category-5 questions skipped |
+| Full benchmark | `locomo`, judge on (`gpt-4o`) | **87.56% (1739/1986)** | Includes category 5 at 95.74% (427/446) |
+
+`locomo-mini` category breakdown with the judge disabled:
 
 | Category                   | AutoMem    | Notes                                   |
 | -------------------------- | ---------- | --------------------------------------- |
-| **Complex Reasoning**      | **100%**   | Perfect score on multi-step reasoning   |
-| **Open Domain**            | **95.84%** | General knowledge recall                |
-| **Temporal Understanding** | **85.05%** | Time-aware queries                      |
-| **Single-hop Recall**      | **79.79%** | Basic fact retrieval                    |
-| **Multi-hop Reasoning**    | **50.00%** | Connecting disparate memories (+12.5pp) |
+| **Open Domain**            | **96.49%** | General knowledge recall                |
+| **Temporal Understanding** | **92.06%** | Time-aware queries                      |
+| **Single-hop Recall**      | **79.07%** | Basic fact retrieval                    |
+| **Multi-hop Reasoning**    | **46.15%** | Connecting disparate memories           |
+| **Complex Reasoning**      | N/A        | Skipped in this setup; use judge-on run |
 
-**Comparison with other systems:**
+Reference point:
 
 | System | Score |
 |--------|-------|
-| AutoMem | 90.53% |
-| CORE | 88.24% |
+| Published CORE result | 88.24% |
+| AutoMem `locomo-mini` judge off | 89.27% |
+| AutoMem `locomo` judge on | 87.56% |
 
-Run the benchmark yourself: `make test-locomo`
+> **Methodology note:** We do not present this as a strict leaderboard claim. The published CORE number is a useful reference point, but the public LoCoMo setups are not perfectly apples-to-apples, especially around category-5 handling. AutoMem is above that published reference on the `locomo-mini` categories 1-4 run and below it on the full judge-enabled run.
+> **History note:** Earlier versions reported 90.53%, but that included two evaluator bugs: temporal matching compared the wrong text (false negatives) and category 5 matched empty strings (false positives). See [`benchmarks/EXPERIMENT_LOG.md`](benchmarks/EXPERIMENT_LOG.md) for the corrected timeline.
+
+Run benchmarks: `make bench-eval BENCH=locomo-mini CONFIG=baseline` (quick) or `BENCH_JUDGE_MODEL=gpt-4o make bench-eval BENCH=locomo CONFIG=baseline` (full, includes category 5)
 
 ### Production Characteristics
 
