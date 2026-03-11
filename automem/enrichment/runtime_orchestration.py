@@ -156,6 +156,9 @@ def enrich_memory(
     find_temporal_relationships_fn: Callable[[Any, str], int],
     detect_patterns_fn: Callable[[Any, str, str], List[Dict[str, Any]]],
     link_semantic_neighbors_fn: Callable[[Any, str], List[Tuple[str, float]]],
+    score_semantic_edges_fn: Optional[Callable[..., int]],
+    score_node_fn: Optional[Callable[[Any, str, str], bool]],
+    observer_reverse_inference_fn: Optional[Callable[[Any, str, List[Tuple[str, float]], List[str], float], None]],
     enrichment_enable_summaries: bool,
     generate_summary_fn: Callable[[str, Any], Any],
     utc_now_fn: Callable[[], str],
@@ -186,6 +189,19 @@ def enrich_memory(
 
     already_processed = bool(properties.get("processed"))
     if already_processed and not forced:
+        # Even if processed, check if stance scoring is missing
+        from automem.utils.jit_resonance import needs_scoring as _needs_lor_check
+        if _needs_lor_check(properties):
+            content = properties.get("content", "") or ""
+            if content:
+                try:
+                    from automem.utils.resonance_scorer import score_stance, save_lor_to_graph
+                    lor_values = score_stance(content)
+                    if lor_values is not None:
+                        save_lor_to_graph(graph, memory_id, lor_values)
+                        logger.debug("Backfill stance scored for %s", memory_id)
+                except Exception:
+                    logger.debug("Backfill stance scoring failed for %s", memory_id)
         return False
 
     content = properties.get("content", "") or ""
@@ -214,8 +230,53 @@ def enrich_memory(
     tag_prefixes = compute_tag_prefixes_fn(tags)
 
     temporal_links = find_temporal_relationships_fn(graph, memory_id)
-    pattern_info = detect_patterns_fn(graph, memory_id, content)
+    # detect_patterns disabled: keyword-frequency Pattern nodes are meaningless.
+    # Node scoring (w_pattern) replaces this with LLM-based classification.
+    pattern_info: List[Dict[str, Any]] = []
     semantic_neighbors = link_semantic_neighbors_fn(graph, memory_id)
+
+    # v3: Score node across 7 type-weight dimensions using LLM (nano)
+    if score_node_fn:
+        try:
+            score_node_fn(graph, memory_id, content)
+        except Exception:
+            logger.exception("Node scoring failed for %s (non-fatal)", memory_id)
+
+    # v4: Stance scoring — 48 concept dimensions via nano
+    from automem.utils.jit_resonance import needs_scoring as _needs_lor
+    if _needs_lor(properties) or forced:
+        try:
+            from automem.utils.resonance_scorer import score_stance, save_lor_to_graph
+            lor_values = score_stance(content)
+            if lor_values is not None:
+                save_lor_to_graph(graph, memory_id, lor_values)
+                logger.debug("Stance scored for %s (%d categories)", memory_id,
+                             sum(1 for v in lor_values.values() if any(x != 0.0 for x in v)))
+            else:
+                logger.debug("Stance scoring returned None for %s (will retry)", memory_id)
+        except Exception:
+            logger.exception("Stance scoring failed for %s (non-fatal, will retry)", memory_id)
+
+    # v2: Score edges across 67 dimensions using LLM (nano)
+    edge_score_count = 0
+    if score_semantic_edges_fn and semantic_neighbors:
+        try:
+            edge_score_count = score_semantic_edges_fn(
+                graph, memory_id, content, semantic_neighbors,
+            )
+        except Exception:
+            logger.exception("Edge scoring failed for %s (non-fatal)", memory_id)
+
+    # v2: Observer reverse inference — backpropagate observer from what was stored
+    # importance = significance (error magnitude for gradient scaling)
+    if observer_reverse_inference_fn and edge_score_count > 0 and semantic_neighbors:
+        try:
+            mem_importance = float(properties.get("importance", 0.5))
+            observer_reverse_inference_fn(
+                graph, memory_id, semantic_neighbors, tags, mem_importance,
+            )
+        except Exception:
+            logger.debug("Observer reverse inference failed for %s (non-fatal)", memory_id)
 
     if enrichment_enable_summaries:
         existing_summary = properties.get("summary")
@@ -235,6 +296,7 @@ def enrich_memory(
             "semantic_neighbors": [
                 {"id": neighbour_id, "score": score} for neighbour_id, score in semantic_neighbors
             ],
+            "edge_scores_created": edge_score_count,
         }
     )
     metadata["enrichment"] = enrichment_meta
@@ -285,11 +347,12 @@ def enrich_memory(
             logger.exception("Failed to sync Qdrant payload for enriched memory %s", memory_id)
 
     logger.debug(
-        "Enriched memory %s (temporal=%s, patterns=%s, semantic=%s)",
+        "Enriched memory %s (temporal=%s, patterns=%s, semantic=%s, edge_scores=%s)",
         memory_id,
         temporal_links,
         pattern_info,
         len(semantic_neighbors),
+        edge_score_count,
     )
 
     return True

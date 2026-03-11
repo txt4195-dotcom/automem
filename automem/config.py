@@ -129,7 +129,13 @@ MEMORY_AUTO_SUMMARIZE = os.getenv("MEMORY_AUTO_SUMMARIZE", "true").lower() not i
     "no",
 }
 # Target length for summarized content
-MEMORY_SUMMARY_TARGET_LENGTH = int(os.getenv("MEMORY_SUMMARY_TARGET_LENGTH", "300"))
+MEMORY_SUMMARY_TARGET_LENGTH = int(os.getenv("MEMORY_SUMMARY_TARGET_LENGTH", "500"))
+# Bilingual normalization: auto-translate non-English content to English (keeps original as reference)
+MEMORY_BILINGUAL_NORMALIZE = os.getenv("MEMORY_BILINGUAL_NORMALIZE", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+}
 
 # Memory types for classification
 MEMORY_TYPES = {"Decision", "Pattern", "Preference", "Style", "Habit", "Insight", "Context"}
@@ -346,6 +352,47 @@ RELATIONSHIP_TYPES: Dict[str, Dict[str, Any]] = {
         public_visible=False,
         color="#A1A1AA",
     ),
+    # v2: Edge scoring sub-layers (67 dimensions across 8 edge types)
+    "SCORE_CULTURE": _relation_config(
+        "Cultural dimension scores (Hofstede + Hall)",
+        authorable=False, system_generated=True,
+        default_expand=False, public_visible=False, color="#D97706",
+    ),
+    "SCORE_IDEOLOGY": _relation_config(
+        "Ideology dimension scores (Harari imagined orders)",
+        authorable=False, system_generated=True,
+        default_expand=False, public_visible=False, color="#DC2626",
+    ),
+    "SCORE_RELIGION": _relation_config(
+        "Religion dimension scores",
+        authorable=False, system_generated=True,
+        default_expand=False, public_visible=False, color="#7C3AED",
+    ),
+    "SCORE_BELIEF": _relation_config(
+        "Belief dimension scores (epistemology, agency, morality)",
+        authorable=False, system_generated=True,
+        default_expand=False, public_visible=False, color="#2563EB",
+    ),
+    "SCORE_SEX": _relation_config(
+        "Sexuality dimension scores (Kinsey extended)",
+        authorable=False, system_generated=True,
+        default_expand=False, public_visible=False, color="#DB2777",
+    ),
+    "SCORE_META": _relation_config(
+        "Meta-cognition scores (self-awareness, biases)",
+        authorable=False, system_generated=True,
+        default_expand=False, public_visible=False, color="#059669",
+    ),
+    "SCORE_COGNITIVE": _relation_config(
+        "Cognitive dimension scores (Big Five, Dark Triad, IQ/EQ/SQ)",
+        authorable=False, system_generated=True,
+        default_expand=False, public_visible=False, color="#0891B2",
+    ),
+    "SCORE_PROCESSING": _relation_config(
+        "Processing preference scores (behavior patterns)",
+        authorable=False, system_generated=True,
+        default_expand=False, public_visible=False, color="#4F46E5",
+    ),
 }
 
 AUTHORABLE_RELATIONS = frozenset(
@@ -431,6 +478,7 @@ SEARCH_WEIGHT_RECENCY = float(os.getenv("SEARCH_WEIGHT_RECENCY", "0.1"))
 SEARCH_WEIGHT_EXACT = float(os.getenv("SEARCH_WEIGHT_EXACT", "0.2"))
 SEARCH_WEIGHT_RELATION = float(os.getenv("SEARCH_WEIGHT_RELATION", "0.25"))
 SEARCH_WEIGHT_RELEVANCE = float(os.getenv("SEARCH_WEIGHT_RELEVANCE", "0.0"))
+SEARCH_WEIGHT_PROFILE = float(os.getenv("SEARCH_WEIGHT_PROFILE", "0.15"))
 
 # API tokens
 API_TOKEN = os.getenv("AUTOMEM_API_TOKEN")

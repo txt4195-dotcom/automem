@@ -1181,7 +1181,11 @@ def test_relation_taxonomy_sets_are_consistent():
     }
     assert config.DEFAULT_EXPAND_RELATIONS == config.AUTHORABLE_RELATIONS
     assert config.PUBLIC_RELATIONS == config.AUTHORABLE_RELATIONS | {"SIMILAR_TO", "PRECEDED_BY"}
-    assert config.FILTERABLE_RELATIONS == config.PUBLIC_RELATIONS | {"DISCOVERED"}
+    score_edge_types = {
+        "SCORE_CULTURE", "SCORE_IDEOLOGY", "SCORE_RELIGION", "SCORE_BELIEF",
+        "SCORE_SEX", "SCORE_META", "SCORE_COGNITIVE", "SCORE_PROCESSING",
+    }
+    assert config.FILTERABLE_RELATIONS == config.PUBLIC_RELATIONS | {"DISCOVERED"} | score_edge_types
     assert set(config.RELATION_COLORS) == config.PUBLIC_RELATIONS
 
 

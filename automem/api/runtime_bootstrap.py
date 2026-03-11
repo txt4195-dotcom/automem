@@ -10,6 +10,7 @@ from automem.api.health import create_health_blueprint
 from automem.api.memory import create_memory_blueprint_full
 from automem.api.recall import create_recall_blueprint
 from automem.api.stream import create_stream_blueprint
+from automem.api.observer import create_observer_blueprint
 from automem.api.viewer import create_viewer_blueprint, is_viewer_enabled
 
 
@@ -104,6 +105,7 @@ def register_blueprints(
         summarize_relation_node_fn,
         update_last_accessed_fn,
         jit_enrich_fn=jit_enrich_fn,
+        utc_now_fn=utc_now_fn,
     )
 
     memory_bp = create_memory_blueprint_full(
@@ -172,6 +174,12 @@ def register_blueprints(
         require_api_token=require_api_token_fn,
     )
 
+    observer_bp = create_observer_blueprint(
+        get_memory_graph_fn=get_memory_graph_fn,
+        utc_now_fn=utc_now_fn,
+        require_api_token_fn=require_api_token_fn,
+    )
+
     app.register_blueprint(health_bp)
     app.register_blueprint(enrichment_bp)
     app.register_blueprint(memory_bp)
@@ -180,6 +188,7 @@ def register_blueprints(
     app.register_blueprint(consolidation_bp)
     app.register_blueprint(graph_bp)
     app.register_blueprint(stream_bp)
+    app.register_blueprint(observer_bp)
 
     if is_viewer_enabled():
         viewer_bp = create_viewer_blueprint()

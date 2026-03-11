@@ -83,13 +83,15 @@ def _extract_keywords(text: str) -> List[str]:
     if not text:
         return []
 
-    words = re.findall(r"[A-Za-z0-9_\-]+", text.lower())
+    words = re.findall(r"[A-Za-z0-9가-힣_\-]+", text.lower())
     keywords: List[str] = []
     seen: set[str] = set()
 
     for word in words:
         cleaned = word.strip("-_")
-        if len(cleaned) < 3:
+        # Korean words are meaningful at 2 chars (개발, 설계, 배포)
+        min_len = 2 if any("\uac00" <= c <= "\ud7a3" for c in cleaned) else 3
+        if len(cleaned) < min_len:
             continue
         if cleaned in SEARCH_STOPWORDS:
             continue
@@ -102,18 +104,16 @@ def _extract_keywords(text: str) -> List[str]:
 
 
 # Summarization system prompt for auto-condensing oversized memories
-SUMMARIZE_SYSTEM_PROMPT = """You are a memory summarization assistant. Your task is to condense a memory into a brief, information-dense summary.
+SUMMARIZE_SYSTEM_PROMPT = """Compress the input into a dense knowledge record. Extract and preserve the core meaning.
 
 Rules:
-1. Preserve the key decision, insight, pattern, or context
-2. Keep critical details: what happened, why it matters, the outcome
-3. Remove filler words, redundant phrasing, and unnecessary detail
-4. Maintain any specific names, files, or technical terms mentioned
-5. Output ONLY the summary text, no JSON or formatting
+1. Preserve WHO (people, roles), WHAT (concept, action), WHY (rationale), HOW (mechanism)
+2. Keep ALL specific names, numbers, technical terms, and causal relationships
+3. Remove only filler words, redundant phrasing, and decorative language
+4. If the input contains a key insight or lesson, state it explicitly
+5. Output ONLY the compressed text, no JSON or formatting
 
-Target length: Under {target_length} characters.
-
-Format: "Brief title. Key context. Impact/outcome."
+Target: Under {target_length} characters. Prioritize information density over brevity.
 """
 
 
@@ -121,7 +121,7 @@ def summarize_content(
     content: str,
     openai_client: Any,
     model: str,
-    target_length: int = 300,
+    target_length: int = 500,
 ) -> Optional[str]:
     """Summarize content using an LLM to fit within target length.
 
@@ -144,14 +144,16 @@ def summarize_content(
     try:
         system_prompt = SUMMARIZE_SYSTEM_PROMPT.format(target_length=target_length)
 
-        # Estimate tokens from target character length (~4 chars/token), cap at 150
-        token_limit = min(150, max(1, int(target_length / 4)))
-
-        # Build model-specific params (o-series and gpt-5 don't support temperature)
+        # Build model-specific params
         extra_params: dict = {}
         if model.startswith(("o", "gpt-5")):
-            extra_params["max_completion_tokens"] = token_limit
+            # Reasoning models: reasoning_effort=low keeps reasoning ~64 tokens.
+            # Output budget: target_length/4 chars→tokens, plus reasoning headroom.
+            output_tokens = max(80, int(target_length / 3))
+            extra_params["max_completion_tokens"] = 300 + output_tokens
+            extra_params["reasoning_effort"] = "low"
         else:
+            token_limit = min(250, max(1, int(target_length / 3)))
             extra_params["max_tokens"] = token_limit
             extra_params["temperature"] = 0.3
 

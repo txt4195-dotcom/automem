@@ -66,6 +66,11 @@ class TestSummarizeContent:
         assert result == expected_summary
         mock_client.chat.completions.create.assert_called_once()
 
+        call = mock_client.chat.completions.create.call_args
+        assert "memory summarization assistant" in call.kwargs["messages"][0]["content"]
+        assert "Target length: Under 300 characters." in call.kwargs["messages"][0]["content"]
+        assert call.kwargs["messages"][1]["content"] == long_content
+
     def test_returns_none_when_summary_not_shorter(self):
         long_content = "x" * 600
         # Summary is same length as original
@@ -84,6 +89,22 @@ class TestSummarizeContent:
 
         result = summarize_content(long_content, mock_client, "gpt-4o-mini", 300)
         assert result is None
+
+    def test_o_series_models_use_max_completion_tokens(self):
+        long_content = "x" * 600
+        expected_summary = "Brief summary of the content."
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=expected_summary))]
+        )
+
+        result = summarize_content(long_content, mock_client, "gpt-5-nano", 180)
+
+        assert result == expected_summary
+        call = mock_client.chat.completions.create.call_args
+        assert call.kwargs["max_completion_tokens"] == 45
+        assert "temperature" not in call.kwargs
 
 
 class TestMemoryStoreContentSize:

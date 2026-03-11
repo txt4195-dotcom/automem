@@ -88,6 +88,17 @@ class MemoryClassifier:
 
 Return JSON with: {"type": "<type>", "confidence": <0.0-1.0>}"""
 
+    SYSTEM_PROMPT_BILINGUAL = """You are a memory classification and normalization system.
+
+1. Classify each memory into exactly ONE type:
+   Decision, Pattern, Preference, Style, Habit, Insight, Context
+
+2. If the content contains non-English text, produce an English version.
+   Keep proper nouns (names, project names, tools) in their original form.
+   If already English, set "en" to null.
+
+Return JSON: {"type": "<type>", "confidence": <0.0-1.0>, "en": "<english version or null>"}"""
+
     def __init__(
         self,
         *,
@@ -95,26 +106,35 @@ Return JSON with: {"type": "<type>", "confidence": <0.0-1.0>}"""
         ensure_openai_client: Callable[[], None],
         get_openai_client: Callable[[], Any],
         classification_model: str,
+        bilingual_normalize: bool = False,
         logger: Any,
     ) -> None:
         self._normalize_memory_type = normalize_memory_type
         self._ensure_openai_client = ensure_openai_client
         self._get_openai_client = get_openai_client
         self._classification_model = classification_model
+        self._bilingual_normalize = bilingual_normalize
         self._logger = logger
 
-    def classify(self, content: str, *, use_llm: bool = True) -> tuple[str, float]:
-        """Classify memory type and return confidence score."""
+    def classify(
+        self, content: str, *, use_llm: bool = True
+    ) -> tuple[str, float, Optional[str]]:
+        """Classify memory type, return confidence, and optionally bilingual text.
+
+        Returns (type, confidence, english_content_or_None).
+        """
         content_lower = content.lower()
 
-        for memory_type, patterns in self.PATTERNS.items():
-            for pattern in patterns:
-                if re.search(pattern, content_lower):
-                    confidence = 0.6
-                    matches = sum(1 for p in patterns if re.search(p, content_lower))
-                    if matches > 1:
-                        confidence = min(0.95, confidence + (matches * 0.1))
-                    return memory_type, confidence
+        # Pattern-based classification (no bilingual since no LLM call)
+        if not self._bilingual_normalize:
+            for memory_type, patterns in self.PATTERNS.items():
+                for pattern in patterns:
+                    if re.search(pattern, content_lower):
+                        confidence = 0.6
+                        matches = sum(1 for p in patterns if re.search(p, content_lower))
+                        if matches > 1:
+                            confidence = min(0.95, confidence + (matches * 0.1))
+                        return memory_type, confidence, None
 
         if use_llm:
             try:
@@ -124,9 +144,9 @@ Return JSON with: {"type": "<type>", "confidence": <0.0-1.0>}"""
             except Exception:
                 self._logger.exception("LLM classification failed, using fallback")
 
-        return "Memory", 0.3
+        return "Memory", 0.3, None
 
-    def _classify_with_llm(self, content: str) -> Optional[tuple[str, float]]:
+    def _classify_with_llm(self, content: str) -> Optional[tuple[str, float, Optional[str]]]:
         client = self._get_openai_client()
         if client is None:
             self._ensure_openai_client()
@@ -135,20 +155,24 @@ Return JSON with: {"type": "<type>", "confidence": <0.0-1.0>}"""
             return None
 
         try:
+            use_bilingual = self._bilingual_normalize
+            prompt = self.SYSTEM_PROMPT_BILINGUAL if use_bilingual else self.SYSTEM_PROMPT
+
             extra_params: dict[str, Any] = {}
             uses_max_completion_tokens = self._classification_model.startswith(
                 self.MAX_COMPLETION_PREFIXES
             )
+            max_tok = 200 if use_bilingual else 50
             if uses_max_completion_tokens:
-                extra_params["max_completion_tokens"] = 50
+                extra_params["max_completion_tokens"] = max_tok
             else:
-                extra_params["max_tokens"] = 50
+                extra_params["max_tokens"] = max_tok
                 extra_params["temperature"] = 0.3
 
             response = client.chat.completions.create(
                 model=self._classification_model,
                 messages=[
-                    {"role": "system", "content": self.SYSTEM_PROMPT},
+                    {"role": "system", "content": prompt},
                     {"role": "user", "content": content[:1000]},
                 ],
                 response_format={"type": "json_object"},
@@ -168,17 +192,18 @@ Return JSON with: {"type": "<type>", "confidence": <0.0-1.0>}"""
 
             raw_type = result.get("type", "Memory")
             confidence = float(result.get("confidence", 0.7))
+            en_content = result.get("en") if use_bilingual else None
 
             memory_type, was_normalized = self._normalize_memory_type(raw_type)
             if not memory_type:
                 self._logger.warning("LLM returned unmappable type '%s', using Context", raw_type)
-                return "Context", 0.5
+                return "Context", 0.5, en_content
 
             if was_normalized and memory_type != raw_type:
                 self._logger.debug("LLM type normalized '%s' -> '%s'", raw_type, memory_type)
 
             self._logger.info("LLM classified as %s (confidence: %.2f)", memory_type, confidence)
-            return memory_type, confidence
+            return memory_type, confidence, en_content
         except Exception as exc:
             self._logger.warning("LLM classification failed: %s", exc)
             return None

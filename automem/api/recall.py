@@ -1008,6 +1008,7 @@ def handle_recall(
     expansion_limit_default: Optional[int] = None,
     on_access: Optional[Callable[[List[str]], None]] = None,
     jit_enrich_fn: Optional[Callable[[str, Dict[str, Any]], Optional[Dict[str, Any]]]] = None,
+    utc_now_fn: Optional[Callable[[], str]] = None,
 ):
     query_start = time.perf_counter()
     query_text = (request.args.get("query") or "").strip()
@@ -1158,6 +1159,28 @@ def handle_recall(
     graph = get_memory_graph()
     qdrant_client = get_qdrant_client()
 
+    # User profile for personalized scoring
+    user_id_param = (request.args.get("user_id") or request.args.get("user") or "").strip() or None
+    user_lens = None
+    if graph is not None:
+        from automem.utils.user_profile import get_user_lens
+
+        user_lens = get_user_lens(graph, user_id_param)
+
+    # Wrap compute_metadata_score to inject user_lens into every call
+    _original_compute_metadata_score = compute_metadata_score
+    if user_lens is not None:
+        def compute_metadata_score(
+            result: Dict[str, Any],
+            query: str,
+            tokens: List[str],
+            context_profile: Optional[Dict[str, Any]] = None,
+        ) -> tuple:
+            return _original_compute_metadata_score(
+                result, query, tokens, context_profile, user_lens=user_lens
+            )
+
+
     def _parse_iso_for_sort(value: Any) -> str:
         """
         Best-effort ISO-ish sort key. We keep it as a string because timestamps are stored normalized
@@ -1270,6 +1293,24 @@ def handle_recall(
                     per_query_limit,
                     exclude_tags,
                 )
+
+        # Hydrate lor_* from FalkorDB (Qdrant payload doesn't include them)
+        if graph is not None:
+            try:
+                from automem.utils.jit_resonance import hydrate_lor_from_graph
+
+                hydrate_lor_from_graph(graph, local_results)
+            except Exception:
+                pass  # best-effort
+
+        # JIT resonance scoring: score unscored memories before ranking
+        if user_lens is not None and graph is not None:
+            try:
+                from automem.utils.jit_resonance import jit_score_candidates
+
+                jit_score_candidates(graph, local_results)
+            except Exception:
+                pass  # JIT scoring is best-effort
 
         query_tokens = extract_keywords(query_str.lower()) if query_str else []
         for result in local_results:
@@ -1507,6 +1548,23 @@ def handle_recall(
                     result["jit_enriched"] = True
                     jit_enriched_count += 1
 
+    # v2: Observer-weighted re-ranking
+    observer_id = request.args.get("observer_id")
+    observer_applied = False
+    if observer_id and graph and results and utc_now_fn:
+        try:
+            from automem.observer.recall import rerank_with_observer
+
+            results = rerank_with_observer(
+                graph=graph,
+                results=results,
+                observer_id=observer_id,
+                timestamp=utc_now_fn(),
+            )
+            observer_applied = True
+        except Exception:
+            logger.debug("Observer reranking failed for %s (non-fatal)", observer_id)
+
     response = {
         "status": "success",
         "query": query_text,
@@ -1564,6 +1622,8 @@ def handle_recall(
             "priority_types": sorted(any_context_profile.get("priority_types") or []),
             "injected": any_context_injected,
         }
+    if observer_applied:
+        response["observer"] = {"id": observer_id, "applied": True}
 
     logger.info(
         "recall_complete",
@@ -1632,6 +1692,7 @@ def create_recall_blueprint(
     summarize_relation_node: Callable[[Dict[str, Any]], Dict[str, Any]] | None = None,
     on_access: Optional[Callable[[List[str]], None]] = None,
     jit_enrich_fn: Optional[Callable[[str, Dict[str, Any]], Optional[Dict[str, Any]]]] = None,
+    utc_now_fn: Optional[Callable[[], str]] = None,
 ) -> Blueprint:
     bp = Blueprint("recall", __name__)
 
@@ -1663,6 +1724,7 @@ def create_recall_blueprint(
             expansion_limit_default=RECALL_EXPANSION_LIMIT,
             on_access=on_access,
             jit_enrich_fn=jit_enrich_fn,
+            utc_now_fn=utc_now_fn,
         )
 
     @bp.route("/startup-recall", methods=["GET"])

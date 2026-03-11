@@ -36,12 +36,13 @@ def load_keyword_runtime() -> Tuple[Set[str], Set[str], Set[str], Callable[[str]
     def _extract_keywords(text: str) -> List[str]:
         if not text:
             return []
-        words = re.findall(r"[A-Za-z0-9_\-]+", text.lower())
+        words = re.findall(r"[A-Za-z0-9가-힣_\-]+", text.lower())
         keywords: List[str] = []
         seen: set[str] = set()
         for word in words:
             cleaned = word.strip("-_")
-            if len(cleaned) < 3:
+            min_len = 2 if any("\uac00" <= c <= "\ud7a3" for c in cleaned) else 3
+            if len(cleaned) < min_len:
                 continue
             if cleaned in search_stopwords:
                 continue

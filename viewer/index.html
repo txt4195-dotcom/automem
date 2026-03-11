@@ -1,0 +1,814 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AutoMem Viewer</title>
+  <script src="https://unpkg.com/vis-network@9.1.6/standalone/umd/vis-network.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f172a; --surface: #1e293b; --surface2: #334155;
+      --text: #e2e8f0; --text2: #94a3b8; --accent: #3b82f6;
+      --green: #10b981; --red: #ef4444; --amber: #f59e0b;
+      --purple: #8b5cf6; --pink: #ec4899; --orange: #f97316;
+      --radius: 8px;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); }
+    .app { display: flex; flex-direction: column; height: 100vh; }
+    header { display: flex; align-items: center; gap: 16px; padding: 12px 20px; background: var(--surface); border-bottom: 1px solid var(--surface2); }
+    header h1 { font-size: 18px; font-weight: 600; }
+    header .status { margin-left: auto; font-size: 13px; color: var(--text2); }
+    header .status.ok { color: var(--green); }
+    header .status.err { color: var(--red); }
+    .tabs { display: flex; gap: 0; background: var(--surface); border-bottom: 1px solid var(--surface2); padding: 0 20px; }
+    .tab { padding: 10px 20px; font-size: 14px; color: var(--text2); cursor: pointer; border-bottom: 2px solid transparent; transition: all .15s; }
+    .tab:hover { color: var(--text); }
+    .tab.active { color: var(--accent); border-color: var(--accent); }
+    .panel { flex: 1; overflow: auto; display: none; }
+    .panel.active { display: flex; flex-direction: column; }
+    .dashboard { padding: 20px; gap: 20px; }
+    .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+    .stat-card { background: var(--surface); border-radius: var(--radius); padding: 16px; }
+    .stat-card .label { font-size: 12px; color: var(--text2); text-transform: uppercase; letter-spacing: .5px; }
+    .stat-card .value { font-size: 28px; font-weight: 700; margin-top: 4px; }
+    .chart-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 12px; }
+    .chart-card { background: var(--surface); border-radius: var(--radius); padding: 16px; }
+    .chart-card h3 { font-size: 14px; color: var(--text2); margin-bottom: 12px; }
+    .bar-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 13px; }
+    .bar-label { width: 120px; text-align: right; color: var(--text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .bar-fill { height: 20px; border-radius: 3px; min-width: 2px; transition: width .3s; display: flex; align-items: center; padding: 0 6px; font-size: 11px; color: white; }
+    .memories { padding: 20px; gap: 16px; }
+    .search-bar { display: flex; gap: 8px; }
+    .search-bar input { flex: 1; padding: 10px 14px; background: var(--surface); border: 1px solid var(--surface2); border-radius: var(--radius); color: var(--text); font-size: 14px; outline: none; }
+    .search-bar input:focus { border-color: var(--accent); }
+    .search-bar button, .btn { padding: 10px 20px; background: var(--accent); color: white; border: none; border-radius: var(--radius); cursor: pointer; font-size: 14px; }
+    .search-bar button:hover, .btn:hover { opacity: .9; }
+    .tag-filters { display: flex; flex-wrap: wrap; gap: 6px; }
+    .tag-chip { padding: 4px 10px; background: var(--surface2); border-radius: 12px; font-size: 12px; color: var(--text2); cursor: pointer; border: 1px solid transparent; }
+    .tag-chip.active { border-color: var(--accent); color: var(--accent); }
+    .memory-list { display: flex; flex-direction: column; gap: 8px; flex: 1; overflow: auto; }
+    .memory-item { background: var(--surface); border-radius: var(--radius); padding: 14px; cursor: pointer; border-left: 3px solid var(--text2); transition: all .15s; }
+    .memory-item:hover { background: var(--surface2); }
+    .memory-item .top { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+    .memory-item .type-badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 600; }
+    .memory-item .importance { font-size: 11px; color: var(--text2); margin-left: auto; }
+    .memory-item .content { font-size: 13px; line-height: 1.5; color: var(--text); }
+    .memory-item .tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+    .memory-item .tags span { font-size: 11px; color: var(--text2); background: var(--bg); padding: 2px 6px; border-radius: 4px; }
+    .memory-item .meta { font-size: 11px; color: var(--text2); margin-top: 6px; }
+    .result-info { font-size: 13px; color: var(--text2); }
+    .graph-panel { position: relative; display: flex; flex-direction: column; }
+    .graph-container { flex: 1; background: var(--bg); min-height: 400px; }
+    .graph-controls { position: absolute; top: 12px; left: 12px; display: flex; flex-direction: column; gap: 6px; z-index: 10; }
+    .graph-controls button, .graph-controls select { padding: 8px 14px; background: var(--surface); border: 1px solid var(--surface2); border-radius: var(--radius); color: var(--text); cursor: pointer; font-size: 13px; }
+    .graph-controls button:hover { background: var(--surface2); }
+    .graph-info { position: absolute; bottom: 12px; left: 12px; background: var(--surface); border-radius: var(--radius); padding: 12px; font-size: 12px; color: var(--text2); max-width: 400px; z-index: 10; }
+    .node-detail { position: absolute; top: 12px; right: 12px; background: var(--surface); border-radius: var(--radius); padding: 16px; width: 320px; max-height: 80vh; overflow: auto; z-index: 10; display: none; }
+    .node-detail.visible { display: block; }
+    .node-detail h3 { font-size: 14px; margin-bottom: 8px; }
+    .node-detail .close { position: absolute; top: 8px; right: 12px; cursor: pointer; color: var(--text2); font-size: 18px; }
+    .node-detail .field { margin-bottom: 8px; }
+    .node-detail .field-label { font-size: 11px; color: var(--text2); text-transform: uppercase; }
+    .node-detail .field-value { font-size: 13px; margin-top: 2px; }
+    .admin-panel { padding: 20px; gap: 16px; }
+    .admin-card { background: var(--surface); border-radius: var(--radius); padding: 16px; }
+    .admin-card h3 { font-size: 14px; margin-bottom: 8px; }
+    .admin-card p { font-size: 13px; color: var(--text2); margin-bottom: 12px; }
+    .admin-card button { padding: 8px 16px; background: var(--accent); color: white; border: none; border-radius: var(--radius); cursor: pointer; font-size: 13px; margin-right: 8px; }
+    .admin-card button.danger { background: var(--red); }
+    .admin-card .result { margin-top: 12px; font-size: 12px; color: var(--text2); white-space: pre-wrap; font-family: monospace; background: var(--bg); padding: 8px; border-radius: 4px; max-height: 300px; overflow: auto; }
+    .settings-bar { display: flex; align-items: center; gap: 12px; padding: 8px 20px; background: var(--surface); border-top: 1px solid var(--surface2); font-size: 12px; color: var(--text2); flex-wrap: wrap; }
+    .settings-bar input { padding: 4px 8px; background: var(--bg); border: 1px solid var(--surface2); border-radius: 4px; color: var(--text); font-size: 12px; font-family: monospace; width: 280px; }
+    .settings-bar label { display: flex; align-items: center; gap: 4px; }
+    .loading { display: flex; align-items: center; justify-content: center; padding: 40px; color: var(--text2); }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner { width: 20px; height: 20px; border: 2px solid var(--surface2); border-top-color: var(--accent); border-radius: 50%; animation: spin .6s linear infinite; margin-right: 8px; }
+  </style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>AutoMem Viewer</h1>
+    <span class="status" id="status">Connecting...</span>
+  </header>
+
+  <div class="tabs">
+    <div class="tab active" data-panel="dashboard">Dashboard</div>
+    <div class="tab" data-panel="memories">Memories</div>
+    <div class="tab" data-panel="graph">Graph</div>
+    <div class="tab" data-panel="admin">Admin</div>
+  </div>
+
+  <div class="panel dashboard active" id="panel-dashboard">
+    <div class="stat-grid" id="stat-grid"></div>
+    <div class="chart-row" id="chart-row"></div>
+  </div>
+
+  <div class="panel memories" id="panel-memories">
+    <div class="search-bar">
+      <input type="text" id="search-input" placeholder="Search memories..." />
+      <button id="search-btn">Search</button>
+    </div>
+    <div class="tag-filters" id="tag-filters"></div>
+    <div class="result-info" id="result-info"></div>
+    <div class="memory-list" id="memory-list"></div>
+  </div>
+
+  <div class="panel graph-panel" id="panel-graph">
+    <div class="graph-controls">
+      <select id="graph-type-filter"><option value="">All Types</option></select>
+      <select id="graph-limit">
+        <option value="50">50 nodes</option>
+        <option value="100">100 nodes</option>
+        <option value="200" selected>200 nodes</option>
+        <option value="500">500 nodes</option>
+      </select>
+      <input type="text" id="graph-tag-input" placeholder="Filter by tag..." style="padding:6px 10px;background:var(--surface);border:1px solid var(--surface2);border-radius:var(--radius);color:var(--text);font-size:13px;width:180px;" />
+      <button id="graph-reload-btn">Reload</button>
+      <button id="graph-fit-btn">Fit</button>
+    </div>
+    <div class="graph-tag-chips" id="graph-tag-chips" style="display:flex;flex-wrap:wrap;gap:4px;padding:4px 12px;max-height:80px;overflow-y:auto;"></div>
+    <div class="graph-container" id="graph-container"></div>
+    <div class="graph-info" id="graph-info">Loading graph...</div>
+    <div class="node-detail" id="node-detail">
+      <span class="close" id="detail-close">&times;</span>
+      <h3 id="detail-type"></h3>
+      <div id="detail-content"></div>
+    </div>
+  </div>
+
+  <div class="panel admin-panel" id="panel-admin">
+    <div class="admin-card">
+      <h3>Sync Check</h3>
+      <p>Check FalkorDB / Qdrant consistency.</p>
+      <button id="sync-dry-btn">Dry Run</button>
+      <button id="sync-now-btn">Sync Now</button>
+      <div class="result" id="sync-result"></div>
+    </div>
+    <div class="admin-card">
+      <h3>Re-embed All</h3>
+      <p>Regenerate embeddings for all memories. Preserves metadata.</p>
+      <button class="danger" id="reembed-btn">Re-embed</button>
+      <div class="result" id="reembed-result"></div>
+    </div>
+    <div class="admin-card">
+      <h3>Enrichment Status</h3>
+      <button id="enrichment-btn">Check Status</button>
+      <div class="result" id="enrichment-result"></div>
+    </div>
+    <div class="admin-card">
+      <h3>Analyze</h3>
+      <p>Graph statistics and memory patterns.</p>
+      <button id="analyze-btn">Analyze</button>
+      <div class="result" id="analyze-result"></div>
+    </div>
+  </div>
+
+  <div class="settings-bar">
+    <label>API URL: <input id="api-url" value="https://automem-production-2144.up.railway.app" /></label>
+    <label>API Key: <input id="api-key" type="password" value="" /></label>
+    <label>Admin Key: <input id="admin-key" type="password" value="" /></label>
+    <button id="test-conn-btn" style="padding:4px 10px;background:var(--accent);color:white;border:none;border-radius:4px;cursor:pointer;font-size:12px;">Test</button>
+  </div>
+</div>
+
+<script>
+// --- Helpers ---
+const TYPE_COLORS = {
+  Decision:'#3B82F6', Pattern:'#10B981', Preference:'#8B5CF6',
+  Style:'#EC4899', Habit:'#F59E0B', Insight:'#F97316',
+  Context:'#6B7280', Memory:'#94A3B8', Strategy:'#06B6D4'
+};
+
+function $(id) { return document.getElementById(id); }
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function safeText(el, text) { el.textContent = text; }
+
+function apiUrl() { return $('api-url').value.replace(/\/+$/, ''); }
+function apiKey() { return $('api-key').value; }
+function adminKey() { return $('admin-key').value; }
+
+function makeHeaders() {
+  const h = { 'Content-Type': 'application/json' };
+  if (apiKey()) h['X-API-Key'] = apiKey();
+  return h;
+}
+
+async function apiFetch(path, opts) {
+  opts = opts || {};
+  var url = apiUrl() + path;
+  if (opts.admin && adminKey()) {
+    url += (url.indexOf('?') === -1 ? '?' : '&') + 'admin_token=' + encodeURIComponent(adminKey());
+  }
+  const res = await fetch(url, { headers: makeHeaders(), method: opts.method, body: opts.body });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(res.status + ': ' + text.slice(0, 200));
+  }
+  return res.json();
+}
+
+// --- Tabs ---
+document.querySelectorAll('.tab').forEach(function(tab) {
+  tab.addEventListener('click', function() {
+    document.querySelectorAll('.tab').forEach(function(t) { t.classList.remove('active'); });
+    document.querySelectorAll('.panel').forEach(function(p) { p.classList.remove('active'); });
+    tab.classList.add('active');
+    $('panel-' + tab.dataset.panel).classList.add('active');
+    if (tab.dataset.panel === 'graph' && !graphLoaded) loadGraph();
+  });
+});
+
+// --- Connection ---
+async function testConnection() {
+  var status = $('status');
+  try {
+    safeText(status, 'Testing...');
+    status.className = 'status';
+    var data = await apiFetch('/health');
+    safeText(status, 'Connected (' + (data.falkordb || 'ok') + ')');
+    status.className = 'status ok';
+    loadDashboard();
+  } catch (e) {
+    safeText(status, 'Error: ' + e.message);
+    status.className = 'status err';
+  }
+}
+
+// --- Dashboard ---
+async function loadDashboard() {
+  try {
+    var stats = await apiFetch('/graph/stats');
+    var grid = $('stat-grid');
+    grid.textContent = '';
+
+    var statItems = [
+      { label: 'Total Memories', value: stats.totals.nodes },
+      { label: 'Relationships', value: stats.totals.edges },
+      { label: 'Types', value: Object.keys(stats.by_type).length },
+      { label: 'Query Time', value: stats.meta.query_time_ms + 'ms' }
+    ];
+    statItems.forEach(function(item) {
+      var card = document.createElement('div');
+      card.className = 'stat-card';
+      var lbl = document.createElement('div');
+      lbl.className = 'label';
+      lbl.textContent = item.label;
+      var val = document.createElement('div');
+      val.className = 'value';
+      val.textContent = item.value;
+      card.appendChild(lbl);
+      card.appendChild(val);
+      grid.appendChild(card);
+    });
+
+    var chartRow = $('chart-row');
+    chartRow.textContent = '';
+
+    // By Type chart
+    var typeCard = document.createElement('div');
+    typeCard.className = 'chart-card';
+    var typeTitle = document.createElement('h3');
+    typeTitle.textContent = 'By Type';
+    typeCard.appendChild(typeTitle);
+    var maxType = Math.max.apply(null, Object.values(stats.by_type).concat([1]));
+    Object.entries(stats.by_type).sort(function(a,b) { return b[1]-a[1]; }).forEach(function(entry) {
+      var row = document.createElement('div');
+      row.className = 'bar-row';
+      var label = document.createElement('div');
+      label.className = 'bar-label';
+      label.textContent = entry[0];
+      var fill = document.createElement('div');
+      fill.className = 'bar-fill';
+      fill.style.width = (entry[1] / maxType * 100) + '%';
+      fill.style.background = TYPE_COLORS[entry[0]] || '#94A3B8';
+      fill.textContent = entry[1];
+      row.appendChild(label);
+      row.appendChild(fill);
+      typeCard.appendChild(row);
+    });
+    chartRow.appendChild(typeCard);
+
+    // By Relationship chart
+    var relCard = document.createElement('div');
+    relCard.className = 'chart-card';
+    var relTitle = document.createElement('h3');
+    relTitle.textContent = 'By Relationship';
+    relCard.appendChild(relTitle);
+    var maxRel = Math.max.apply(null, Object.values(stats.by_relationship).concat([1]));
+    Object.entries(stats.by_relationship).sort(function(a,b) { return b[1]-a[1]; }).forEach(function(entry) {
+      var row = document.createElement('div');
+      row.className = 'bar-row';
+      var label = document.createElement('div');
+      label.className = 'bar-label';
+      label.textContent = entry[0];
+      var fill = document.createElement('div');
+      fill.className = 'bar-fill';
+      fill.style.width = (entry[1] / maxRel * 100) + '%';
+      fill.style.background = (stats.meta.relation_colors || {})[entry[0]] || '#94A3B8';
+      fill.textContent = entry[1];
+      row.appendChild(label);
+      row.appendChild(fill);
+      relCard.appendChild(row);
+    });
+    chartRow.appendChild(relCard);
+
+    // Importance distribution
+    var imp = stats.importance_distribution;
+    if (imp) {
+      var total = (imp.high || 0) + (imp.medium || 0) + (imp.low || 0);
+      if (total > 0) {
+        var impCard = document.createElement('div');
+        impCard.className = 'chart-card';
+        var impTitle = document.createElement('h3');
+        impTitle.textContent = 'Importance Distribution';
+        impCard.appendChild(impTitle);
+        [['High (>=0.8)', imp.high, 'var(--green)'], ['Medium (0.5-0.8)', imp.medium, 'var(--amber)'], ['Low (<0.5)', imp.low, 'var(--red)']].forEach(function(d) {
+          var row = document.createElement('div');
+          row.className = 'bar-row';
+          var label = document.createElement('div');
+          label.className = 'bar-label';
+          label.textContent = d[0];
+          var fill = document.createElement('div');
+          fill.className = 'bar-fill';
+          fill.style.width = (d[1] / total * 100) + '%';
+          fill.style.background = d[2];
+          fill.textContent = d[1];
+          row.appendChild(label);
+          row.appendChild(fill);
+          impCard.appendChild(row);
+        });
+        chartRow.appendChild(impCard);
+      }
+    }
+
+    // Populate graph type filter
+    var select = $('graph-type-filter');
+    select.textContent = '';
+    var optAll = document.createElement('option');
+    optAll.value = '';
+    optAll.textContent = 'All Types';
+    select.appendChild(optAll);
+    Object.keys(stats.by_type).forEach(function(t) {
+      var opt = document.createElement('option');
+      opt.value = t;
+      opt.textContent = t + ' (' + stats.by_type[t] + ')';
+      select.appendChild(opt);
+    });
+  } catch (e) {
+    $('stat-grid').textContent = 'Failed to load: ' + e.message;
+  }
+}
+
+// --- Memories ---
+async function searchMemories() {
+  var query = $('search-input').value.trim();
+  if (!query) return;
+  var list = $('memory-list');
+  var info = $('result-info');
+  list.textContent = '';
+  var loadEl = document.createElement('div');
+  loadEl.className = 'loading';
+  loadEl.textContent = 'Searching...';
+  list.appendChild(loadEl);
+
+  try {
+    var data = await apiFetch('/recall?query=' + encodeURIComponent(query) + '&limit=30');
+    var results = data.results || [];
+    safeText(info, results.length + ' results (' + (data.query_time_ms ? data.query_time_ms.toFixed(0) : '?') + 'ms)');
+
+    if (!results.length) {
+      list.textContent = '';
+      var noRes = document.createElement('div');
+      noRes.className = 'loading';
+      noRes.textContent = 'No results found';
+      list.appendChild(noRes);
+      return;
+    }
+
+    var allTags = {};
+    results.forEach(function(r) { (r.memory && r.memory.tags || []).forEach(function(t) { allTags[t] = true; }); });
+    renderTagFilters(Object.keys(allTags));
+
+    list.textContent = '';
+    results.forEach(function(r) { list.appendChild(createMemoryItem(r)); });
+  } catch (e) {
+    list.textContent = '';
+    var errEl = document.createElement('div');
+    errEl.className = 'loading';
+    errEl.textContent = 'Error: ' + e.message;
+    list.appendChild(errEl);
+  }
+}
+
+function renderTagFilters(tags) {
+  var container = $('tag-filters');
+  container.textContent = '';
+  tags.sort().forEach(function(t) {
+    var chip = document.createElement('span');
+    chip.className = 'tag-chip';
+    chip.textContent = t;
+    chip.addEventListener('click', function() { filterByTag(t); });
+    container.appendChild(chip);
+  });
+}
+
+async function filterByTag(tag) {
+  var list = $('memory-list');
+  var info = $('result-info');
+  list.textContent = '';
+  var loadEl = document.createElement('div');
+  loadEl.className = 'loading';
+  loadEl.textContent = 'Loading...';
+  list.appendChild(loadEl);
+
+  try {
+    var data = await apiFetch('/memory/by-tag?tags=' + encodeURIComponent(tag) + '&limit=50');
+    var results = data.results || data.memories || [];
+    safeText(info, results.length + ' memories with tag "' + tag + '"');
+    list.textContent = '';
+    results.forEach(function(r) {
+      list.appendChild(createMemoryItem({ memory: r, final_score: r.importance, id: r.id }));
+    });
+  } catch (e) {
+    list.textContent = '';
+    var errEl = document.createElement('div');
+    errEl.className = 'loading';
+    errEl.textContent = 'Error: ' + e.message;
+    list.appendChild(errEl);
+  }
+}
+
+function createMemoryItem(r) {
+  var m = r.memory || r;
+  var type = m.type || 'Memory';
+  var color = TYPE_COLORS[type] || '#94A3B8';
+  var id = m.id || r.id || '';
+
+  var item = document.createElement('div');
+  item.className = 'memory-item';
+  item.style.borderLeftColor = color;
+  item.addEventListener('click', function() { showInGraph(id); });
+
+  var top = document.createElement('div');
+  top.className = 'top';
+  var badge = document.createElement('span');
+  badge.className = 'type-badge';
+  badge.style.background = color + '20';
+  badge.style.color = color;
+  badge.textContent = type;
+  top.appendChild(badge);
+  var impEl = document.createElement('span');
+  impEl.className = 'importance';
+  var parts = [];
+  if (r.final_score != null) parts.push((r.final_score * 100).toFixed(1) + '%');
+  if (m.importance != null) parts.push('imp: ' + m.importance);
+  impEl.textContent = parts.join(' ');
+  top.appendChild(impEl);
+  item.appendChild(top);
+
+  var content = document.createElement('div');
+  content.className = 'content';
+  content.textContent = (m.content || '').slice(0, 300);
+  item.appendChild(content);
+
+  if (m.tags && m.tags.length) {
+    var tagsDiv = document.createElement('div');
+    tagsDiv.className = 'tags';
+    m.tags.forEach(function(t) {
+      var s = document.createElement('span');
+      s.textContent = t;
+      tagsDiv.appendChild(s);
+    });
+    item.appendChild(tagsDiv);
+  }
+
+  var meta = document.createElement('div');
+  meta.className = 'meta';
+  var ts = m.timestamp ? new Date(m.timestamp).toLocaleDateString() : '';
+  meta.textContent = ts + ' \u00b7 ' + id.slice(0, 8);
+  item.appendChild(meta);
+
+  return item;
+}
+
+$('search-input').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') searchMemories();
+});
+$('search-btn').addEventListener('click', searchMemories);
+
+// --- Graph ---
+var network = null;
+var graphLoaded = false;
+var graphNodes = null;
+var graphEdges = null;
+
+async function loadGraph() {
+  var container = $('graph-container');
+  var info = $('graph-info');
+  safeText(info, 'Loading graph...');
+
+  var typeFilter = $('graph-type-filter').value;
+  var limit = $('graph-limit').value;
+  var url = '/graph/snapshot?limit=' + limit;
+  if (typeFilter) url += '&types=' + typeFilter;
+
+  try {
+    var data = await apiFetch(url);
+    var nodes = data.nodes.map(function(n) {
+      return {
+        id: n.id,
+        label: (n.content || '').slice(0, 40),
+        title: n.type + ': ' + (n.content || '').slice(0, 200),
+        color: { background: n.color, border: n.color, highlight: { background: n.color, border: '#fff' } },
+        size: (n.radius || 1) * 12,
+        opacity: n.opacity || 0.8,
+        font: { color: '#e2e8f0', size: 10 },
+        _data: n
+      };
+    });
+
+    var edges = data.edges.map(function(e) {
+      return {
+        id: e.id,
+        from: e.source,
+        to: e.target,
+        color: { color: e.color + '80', highlight: e.color },
+        width: (e.strength || 0.5) * 2,
+        arrows: { to: { enabled: true, scaleFactor: 0.5 } },
+        title: e.type + ' (strength: ' + e.strength + ')',
+        _data: e
+      };
+    });
+
+    graphNodes = new vis.DataSet(nodes);
+    graphEdges = new vis.DataSet(edges);
+
+    if (network) network.destroy();
+
+    network = new vis.Network(container, { nodes: graphNodes, edges: graphEdges }, {
+      physics: {
+        solver: 'forceAtlas2Based',
+        forceAtlas2Based: { gravitationalConstant: -40, centralGravity: 0.005, springLength: 120, springConstant: 0.04 },
+        stabilization: { iterations: 150, updateInterval: 25 }
+      },
+      interaction: { hover: true, tooltipDelay: 200, zoomView: true, dragView: true },
+      nodes: { shape: 'dot', borderWidth: 2 },
+      edges: { smooth: { type: 'continuous' } }
+    });
+
+    network.on('click', function(params) {
+      if (params.nodes.length) showNodeDetail(params.nodes[0]);
+    });
+    network.on('stabilizationProgress', function(p) {
+      safeText(info, 'Stabilizing... ' + Math.round(p.iterations / p.total * 100) + '%');
+    });
+    network.on('stabilizationIterationsDone', function() {
+      safeText(info, data.stats.returned_nodes + ' nodes, ' + data.stats.returned_edges + ' edges (' + data.meta.query_time_ms + 'ms)');
+    });
+
+    graphLoaded = true;
+    buildTagChips(data.nodes);
+  } catch (e) {
+    safeText(info, 'Error: ' + e.message);
+  }
+}
+
+var activeTagFilters = [];
+var allGraphData = { nodes: [], edges: [] };
+
+function buildTagChips(rawNodes) {
+  var tagCounts = {};
+  rawNodes.forEach(function(n) {
+    (n.tags || []).forEach(function(t) {
+      tagCounts[t] = (tagCounts[t] || 0) + 1;
+    });
+  });
+  // Sort by count desc
+  var sorted = Object.keys(tagCounts).sort(function(a, b) { return tagCounts[b] - tagCounts[a]; });
+
+  var container = $('graph-tag-chips');
+  container.textContent = '';
+  sorted.forEach(function(tag) {
+    var chip = document.createElement('span');
+    chip.className = 'tag-chip' + (activeTagFilters.indexOf(tag) >= 0 ? ' active' : '');
+    chip.textContent = tag + ' (' + tagCounts[tag] + ')';
+    chip.addEventListener('click', function() {
+      var idx = activeTagFilters.indexOf(tag);
+      if (idx >= 0) { activeTagFilters.splice(idx, 1); }
+      else { activeTagFilters.push(tag); }
+      applyTagFilter();
+      // Toggle chip style
+      chip.className = 'tag-chip' + (activeTagFilters.indexOf(tag) >= 0 ? ' active' : '');
+    });
+    container.appendChild(chip);
+  });
+}
+
+function applyTagFilter() {
+  if (!graphNodes) return;
+  var info = $('graph-info');
+  if (activeTagFilters.length === 0) {
+    // Show all nodes
+    graphNodes.forEach(function(node) {
+      graphNodes.update({ id: node.id, hidden: false });
+    });
+    safeText(info, graphNodes.length + ' nodes (no filter)');
+    return;
+  }
+  var shown = 0;
+  graphNodes.forEach(function(node) {
+    var d = node._data;
+    var tags = d.tags || [];
+    var match = activeTagFilters.every(function(f) { return tags.indexOf(f) >= 0; });
+    graphNodes.update({ id: node.id, hidden: !match });
+    if (match) shown++;
+  });
+  safeText(info, shown + '/' + graphNodes.length + ' nodes (filtered by: ' + activeTagFilters.join(', ') + ')');
+}
+
+function graphFit() { if (network) network.fit({ animation: true }); }
+
+async function showNodeDetail(nodeId) {
+  var detail = $('node-detail');
+  var node = graphNodes.get(nodeId);
+  if (!node) return;
+  var d = node._data;
+
+  var dtEl = $('detail-type');
+  dtEl.textContent = d.type || 'Memory';
+  dtEl.style.color = d.color || '#94A3B8';
+
+  var dc = $('detail-content');
+  dc.textContent = '';
+
+  function addField(label, value) {
+    var f = document.createElement('div');
+    f.className = 'field';
+    var fl = document.createElement('div');
+    fl.className = 'field-label';
+    fl.textContent = label;
+    var fv = document.createElement('div');
+    fv.className = 'field-value';
+    fv.textContent = value;
+    f.appendChild(fl);
+    f.appendChild(fv);
+    dc.appendChild(f);
+  }
+
+  addField('Content', d.content || '');
+  addField('ID', d.id);
+  addField('Importance / Confidence', d.importance + ' / ' + d.confidence);
+  addField('Tags', (d.tags || []).join(', ') || 'none');
+  addField('Timestamp', d.timestamp ? new Date(d.timestamp).toLocaleString() : 'unknown');
+
+  // Neighbors
+  try {
+    var nbr = await apiFetch('/graph/neighbors/' + nodeId + '?depth=1&include_semantic=true&semantic_limit=5');
+    var gn = nbr.graph_neighbors || [];
+    var sn = nbr.semantic_neighbors || [];
+
+    if (gn.length) {
+      var gnField = document.createElement('div');
+      gnField.className = 'field';
+      var gnLabel = document.createElement('div');
+      gnLabel.className = 'field-label';
+      gnLabel.textContent = 'Graph Neighbors (' + gn.length + ')';
+      gnField.appendChild(gnLabel);
+      gn.forEach(function(n) {
+        var line = document.createElement('div');
+        line.style.fontSize = '12px';
+        line.style.margin = '4px 0';
+        line.style.cursor = 'pointer';
+        line.style.color = TYPE_COLORS[n.type] || '#94A3B8';
+        line.textContent = '[' + n.type + '] ' + (n.content || '').slice(0, 80);
+        line.addEventListener('click', function() { focusNode(n.id); });
+        gnField.appendChild(line);
+      });
+      dc.appendChild(gnField);
+    }
+
+    if (sn.length) {
+      var snField = document.createElement('div');
+      snField.className = 'field';
+      var snLabel = document.createElement('div');
+      snLabel.className = 'field-label';
+      snLabel.textContent = 'Semantic Neighbors (' + sn.length + ')';
+      snField.appendChild(snLabel);
+      sn.forEach(function(n) {
+        var line = document.createElement('div');
+        line.style.fontSize = '12px';
+        line.style.margin = '4px 0';
+        line.style.color = TYPE_COLORS[n.type] || '#94A3B8';
+        line.textContent = '[' + n.similarity + '] ' + (n.content || '').slice(0, 80);
+        snField.appendChild(line);
+      });
+      dc.appendChild(snField);
+    }
+  } catch (e) {
+    addField('Neighbors Error', e.message);
+  }
+
+  detail.classList.add('visible');
+  if (network) {
+    network.selectNodes([nodeId]);
+    network.focus(nodeId, { scale: 1.5, animation: true });
+  }
+}
+
+function closeDetail() {
+  $('node-detail').classList.remove('visible');
+  if (network) network.unselectAll();
+}
+
+function focusNode(nodeId) {
+  if (network && graphNodes.get(nodeId)) {
+    network.selectNodes([nodeId]);
+    network.focus(nodeId, { scale: 1.5, animation: true });
+    showNodeDetail(nodeId);
+  }
+}
+
+function showInGraph(memoryId) {
+  if (!memoryId) return;
+  document.querySelectorAll('.tab').forEach(function(t) { t.classList.remove('active'); });
+  document.querySelectorAll('.panel').forEach(function(p) { p.classList.remove('active'); });
+  document.querySelector('[data-panel="graph"]').classList.add('active');
+  $('panel-graph').classList.add('active');
+
+  if (!graphLoaded) {
+    loadGraph().then(function() { setTimeout(function() { focusNode(memoryId); }, 1000); });
+  } else {
+    focusNode(memoryId);
+  }
+}
+
+$('detail-close').addEventListener('click', closeDetail);
+$('graph-reload-btn').addEventListener('click', function() { activeTagFilters = []; loadGraph(); });
+$('graph-fit-btn').addEventListener('click', graphFit);
+$('graph-type-filter').addEventListener('change', function() { activeTagFilters = []; loadGraph(); });
+
+// Tag input filters the chips visually
+$('graph-tag-input').addEventListener('input', function() {
+  var q = this.value.toLowerCase();
+  var chips = $('graph-tag-chips').children;
+  for (var i = 0; i < chips.length; i++) {
+    chips[i].style.display = chips[i].textContent.toLowerCase().indexOf(q) >= 0 ? '' : 'none';
+  }
+});
+
+// --- Admin ---
+async function adminAction(endpoint, method, body, resultEl) {
+  safeText(resultEl, 'Running...');
+  try {
+    var data = await apiFetch(endpoint, { method: method, admin: true, body: body ? JSON.stringify(body) : undefined });
+    safeText(resultEl, JSON.stringify(data, null, 2));
+  } catch (e) {
+    safeText(resultEl, 'Error: ' + e.message);
+  }
+}
+
+$('sync-dry-btn').addEventListener('click', function() { adminAction('/admin/sync', 'POST', { dry_run: true }, $('sync-result')); });
+$('sync-now-btn').addEventListener('click', function() { adminAction('/admin/sync', 'POST', { dry_run: false }, $('sync-result')); });
+$('reembed-btn').addEventListener('click', function() {
+  if (!confirm('This will re-embed all memories. Continue?')) return;
+  adminAction('/admin/reembed', 'POST', { batch_size: 32 }, $('reembed-result'));
+});
+$('enrichment-btn').addEventListener('click', function() {
+  var el = $('enrichment-result');
+  safeText(el, 'Loading...');
+  apiFetch('/enrichment/status').then(function(data) { safeText(el, JSON.stringify(data, null, 2)); }).catch(function(e) { safeText(el, 'Error: ' + e.message); });
+});
+$('analyze-btn').addEventListener('click', function() {
+  var el = $('analyze-result');
+  safeText(el, 'Loading...');
+  apiFetch('/analyze').then(function(data) { safeText(el, JSON.stringify(data, null, 2)); }).catch(function(e) { safeText(el, 'Error: ' + e.message); });
+});
+
+$('test-conn-btn').addEventListener('click', testConnection);
+
+// --- Init ---
+var savedApiKey = localStorage.getItem('automem_api_key');
+var savedAdminKey = localStorage.getItem('automem_admin_key');
+var savedUrl = localStorage.getItem('automem_url');
+if (savedApiKey) $('api-key').value = savedApiKey;
+if (savedAdminKey) $('admin-key').value = savedAdminKey;
+if (savedUrl) $('api-url').value = savedUrl;
+
+['api-key', 'admin-key', 'api-url'].forEach(function(id) {
+  $(id).addEventListener('change', function() {
+    localStorage.setItem('automem_' + id.replace(/-/g, '_'), $(id).value);
+  });
+});
+
+testConnection();
+</script>
+</body>
+</html>

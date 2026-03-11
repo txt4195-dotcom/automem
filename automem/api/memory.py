@@ -74,7 +74,7 @@ def create_memory_blueprint_full(
     generate_real_embedding: Callable[[str], List[float]],
     enqueue_enrichment: Callable[[str], None],
     enqueue_embedding: Callable[[str, str], None],
-    memory_classify: Callable[[str], tuple[str, float]],
+    memory_classify: Callable[[str], tuple[str, float, Optional[str]]],
     point_struct: Any,
     collection_name: str,
     authorable_relations: Set[str] | List[str],
@@ -173,7 +173,9 @@ def create_memory_blueprint_full(
             else:
                 type_confidence = coerce_importance(type_confidence)
         else:
-            memory_type, type_confidence = memory_classify(content)
+            memory_type, type_confidence, en_content = memory_classify(content)
+            if en_content:
+                content = f"{content}\n\n[EN] {en_content}"
 
         t_valid = payload.get("t_valid")
         t_invalid = payload.get("t_invalid")
@@ -769,7 +771,9 @@ def create_memory_blueprint_full(
                     coerce_importance(type_confidence) if type_confidence is not None else 0.9
                 )
             else:
-                memory_type, type_confidence = memory_classify(content)
+                memory_type, type_confidence, en_content = memory_classify(content)
+                if en_content:
+                    content = f"{content}\n\n[EN] {en_content}"
 
             validated.append(
                 {

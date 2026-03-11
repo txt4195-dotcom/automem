@@ -82,9 +82,14 @@ def init_qdrant(
             parsed.port or "default",
             parsed.scheme == "https",
         )
+        use_https = parsed.scheme == "https"
+        port = parsed.port or (443 if use_https else 6333)
         state.qdrant = qdrant_client_cls(
-            url=QDRANT_URL,
+            host=parsed.hostname,
+            port=port,
+            https=use_https,
             api_key=QDRANT_API_KEY,
+            prefer_grpc=False,
         )
         ensure_collection_fn()
         logger.info("Qdrant connection established")
@@ -141,6 +146,17 @@ def ensure_qdrant_collection(
                 collection_name=collection_name,
                 vectors_config=vector_params_cls(size=effective_dim, distance=distance_enum.COSINE),
             )
+
+        # Lower HNSW indexing threshold so small collections get indexed
+        try:
+            from qdrant_client.models import OptimizersConfigDiff
+
+            state.qdrant.update_collection(
+                collection_name=collection_name,
+                optimizer_config=OptimizersConfigDiff(indexing_threshold=1),
+            )
+        except Exception:
+            logger.debug("Could not set indexing_threshold (non-fatal)")
 
         logger.info("Ensuring Qdrant payload indexes for collection '%s'", collection_name)
         if payload_schema_type_enum:

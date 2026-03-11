@@ -156,6 +156,7 @@ from automem.config import (
     FILTERABLE_RELATIONS,
     GRAPH_NAME,
     JIT_ENRICHMENT_ENABLED,
+    MEMORY_BILINGUAL_NORMALIZE,
     MEMORY_TYPES,
     RECALL_EXPANSION_LIMIT,
     RECALL_RELATION_LIMIT,
@@ -309,6 +310,7 @@ memory_classifier = MemoryClassifier(
     ensure_openai_client=init_openai,
     get_openai_client=get_openai_client,
     classification_model=CLASSIFICATION_MODEL,
+    bilingual_normalize=MEMORY_BILINGUAL_NORMALIZE,
     logger=logger,
 )
 
@@ -432,6 +434,7 @@ _run_sync_check = _sync_runtime.run_sync_check
 _enrichment_runtime = create_enrichment_runtime(
     get_memory_graph_fn=get_memory_graph,
     get_qdrant_client_fn=get_qdrant_client,
+    get_openai_client_fn=get_openai_client,
     parse_metadata_field_fn=_parse_metadata_field,
     normalize_tag_list_fn=_normalize_tag_list,
     extract_entities_fn=extract_entities,

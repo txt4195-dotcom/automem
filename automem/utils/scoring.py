@@ -9,6 +9,7 @@ from automem.config import (
     SEARCH_WEIGHT_EXACT,
     SEARCH_WEIGHT_IMPORTANCE,
     SEARCH_WEIGHT_KEYWORD,
+    SEARCH_WEIGHT_PROFILE,
     SEARCH_WEIGHT_RECENCY,
     SEARCH_WEIGHT_RELATION,
     SEARCH_WEIGHT_RELEVANCE,
@@ -123,6 +124,7 @@ def _compute_metadata_score(
     query: str,
     tokens: List[str],
     context_profile: Optional[Dict[str, Any]] = None,
+    user_lens: Optional[Dict[str, Any]] = None,
 ) -> Tuple[float, Dict[str, float]]:
     memory = result.get("memory", {})
     metadata = _parse_metadata_field(memory.get("metadata")) if memory else {}
@@ -177,6 +179,15 @@ def _compute_metadata_score(
     relevance = memory.get("relevance_score")
     relevance_score = float(relevance) if isinstance(relevance, (int, float)) else 0.0
 
+    # Profile score: log(odds) * resonance per concept, summed across categories
+    profile_score = 0.0
+    if user_lens:
+        from automem.utils.user_profile import compute_profile_score, get_memory_resonance
+
+        resonance = get_memory_resonance(memory)
+        if resonance:
+            profile_score = compute_profile_score(user_lens, resonance)
+
     final = (
         SEARCH_WEIGHT_VECTOR * vector_component
         + SEARCH_WEIGHT_KEYWORD * keyword_component
@@ -187,6 +198,7 @@ def _compute_metadata_score(
         + SEARCH_WEIGHT_RECENCY * recency_score
         + SEARCH_WEIGHT_EXACT * exact_match
         + SEARCH_WEIGHT_RELEVANCE * relevance_score
+        + SEARCH_WEIGHT_PROFILE * profile_score
         + context_bonus
     )
 
@@ -200,6 +212,7 @@ def _compute_metadata_score(
         "recency": recency_score,
         "exact": exact_match,
         "relevance": relevance_score,
+        "profile": profile_score,
         "context": context_bonus,
     }
 
