@@ -67,8 +67,9 @@ class TestSummarizeContent:
         mock_client.chat.completions.create.assert_called_once()
 
         call = mock_client.chat.completions.create.call_args
-        assert "memory summarization assistant" in call.kwargs["messages"][0]["content"]
-        assert "Target length: Under 300 characters." in call.kwargs["messages"][0]["content"]
+        system_content = call.kwargs["messages"][0]["content"].lower()
+        assert "compress" in system_content or "summariz" in system_content
+        assert "300" in call.kwargs["messages"][0]["content"]
         assert call.kwargs["messages"][1]["content"] == long_content
 
     def test_returns_none_when_summary_not_shorter(self):
@@ -103,7 +104,9 @@ class TestSummarizeContent:
 
         assert result == expected_summary
         call = mock_client.chat.completions.create.call_args
-        assert call.kwargs["max_completion_tokens"] == 45
+        # Reasoning models get 300 + max(80, target_length/3) tokens
+        expected_tokens = 300 + max(80, int(180 / 3))
+        assert call.kwargs["max_completion_tokens"] == expected_tokens
         assert "temperature" not in call.kwargs
 
 

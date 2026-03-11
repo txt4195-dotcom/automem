@@ -30,10 +30,6 @@ EXPECTED_ROUTE_METHODS = {
     ("GET", "/viewer/<path:path>"),
     ("GET", "/stream"),
     ("GET", "/stream/status"),
-    # v2: Observer API
-    ("GET", "/observer/<observer_id>"),
-    ("POST", "/observer/<observer_id>"),
-    ("POST", "/observer/<observer_id>/feedback"),
 }
 
 

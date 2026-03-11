@@ -10,9 +10,6 @@ from automem.enrichment.runtime_helpers import (
 from automem.enrichment.runtime_helpers import (
     link_semantic_neighbors as _link_semantic_neighbors_runtime,
 )
-from automem.enrichment.runtime_helpers import (
-    score_semantic_edges as _score_semantic_edges_runtime,
-)
 from automem.enrichment.node_scoring import (
     score_nodes_with_llm as _score_nodes_with_llm,
     save_node_scores as _save_node_scores,
@@ -91,22 +88,6 @@ def create_enrichment_runtime(
             logger=logger,
         )
 
-    def score_semantic_edges(
-        graph: Any,
-        memory_id: str,
-        content: str,
-        semantic_neighbors: List[Tuple[str, float]],
-    ) -> int:
-        return _score_semantic_edges_runtime(
-            graph=graph,
-            memory_id=memory_id,
-            source_content=content,
-            semantic_neighbors=semantic_neighbors,
-            get_openai_client_fn=get_openai_client_fn,
-            utc_now_fn=utc_now_fn,
-            logger=logger,
-        )
-
     def jit_enrich_lightweight(
         memory_id: str, properties: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
@@ -140,68 +121,6 @@ def create_enrichment_runtime(
             return _save_node_scores(graph, results[0])
         return False
 
-    def observer_reverse_inference(
-        graph: Any,
-        memory_id: str,
-        semantic_neighbors: List[Tuple[str, float]],
-        tags: List[str],
-        importance: float = 0.5,
-    ) -> None:
-        """Backpropagate observer values from what the user chose to store.
-
-        importance = significance (error magnitude). High importance = strong
-        gradient, low importance = weak gradient. The mismatch between
-        nano's edge scores (target) and observer values (current estimate)
-        is the error signal, scaled by importance.
-        """
-        observer_id = None
-        for tag in tags:
-            if tag.startswith("user:") or tag.startswith("agent:"):
-                observer_id = tag
-                break
-        if not observer_id:
-            return
-
-        from automem.enrichment.edge_scoring import SCORE_EDGE_TYPES
-        from automem.observer.recall import fetch_score_edges
-        from automem.observer.vector import (
-            get_or_create_observer,
-            infer_observer_from_store,
-            save_observer,
-        )
-
-        timestamp = utc_now_fn()
-        observer = get_or_create_observer(
-            graph=graph, observer_id=observer_id, timestamp=timestamp,
-        )
-
-        all_layers = list(SCORE_EDGE_TYPES.keys())
-        edge_scores_list = []
-        for neighbor_id, _score in semantic_neighbors:
-            scores = fetch_score_edges(
-                graph=graph,
-                source_id=memory_id,
-                target_id=neighbor_id,
-                layers=all_layers,
-            )
-            if scores:
-                edge_scores_list.append(scores)
-
-        if edge_scores_list:
-            deltas = infer_observer_from_store(
-                observer=observer,
-                edge_scores_list=edge_scores_list,
-                significance=importance,
-            )
-            save_observer(graph=graph, observer=observer, timestamp=timestamp)
-            logger.debug(
-                "Observer %s updated via reverse inference from %s "
-                "(significance=%.2f, %d edge sets, %d dims moved)",
-                observer_id, memory_id[:8], importance,
-                len(edge_scores_list),
-                sum(len(d) for d in deltas.values()),
-            )
-
     def enrich_memory(memory_id: str, *, forced: bool = False) -> bool:
         return _enrich_memory_runtime(
             memory_id=memory_id,
@@ -216,9 +135,7 @@ def create_enrichment_runtime(
             find_temporal_relationships_fn=find_temporal_relationships,
             detect_patterns_fn=detect_patterns,
             link_semantic_neighbors_fn=link_semantic_neighbors,
-            score_semantic_edges_fn=score_semantic_edges,
             score_node_fn=score_node,
-            observer_reverse_inference_fn=observer_reverse_inference,
             enrichment_enable_summaries=enrichment_enable_summaries,
             generate_summary_fn=generate_summary_fn,
             utc_now_fn=utc_now_fn,

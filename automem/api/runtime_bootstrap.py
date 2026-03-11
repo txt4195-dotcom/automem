@@ -10,7 +10,6 @@ from automem.api.health import create_health_blueprint
 from automem.api.memory import create_memory_blueprint_full
 from automem.api.recall import create_recall_blueprint
 from automem.api.stream import create_stream_blueprint
-from automem.api.observer import create_observer_blueprint
 from automem.api.viewer import create_viewer_blueprint, is_viewer_enabled
 
 
@@ -52,7 +51,7 @@ def register_blueprints(
     generate_real_embedding_fn: Callable[[str], list[float]],
     generate_real_embeddings_batch_fn: Optional[Callable[[list[str]], list[list[float]]]] = None,
     enqueue_embedding_fn: Callable[[str, str], None],
-    classify_memory_fn: Callable[[str], tuple[str, float]],
+    classify_memory_fn: Callable[[str], tuple[str, float, Optional[str]]],
     point_struct_cls: Any,
     authorable_relations: set[str],
     relationship_types: dict[str, dict[str, Any]],
@@ -174,12 +173,6 @@ def register_blueprints(
         require_api_token=require_api_token_fn,
     )
 
-    observer_bp = create_observer_blueprint(
-        get_memory_graph_fn=get_memory_graph_fn,
-        utc_now_fn=utc_now_fn,
-        require_api_token_fn=require_api_token_fn,
-    )
-
     app.register_blueprint(health_bp)
     app.register_blueprint(enrichment_bp)
     app.register_blueprint(memory_bp)
@@ -188,7 +181,6 @@ def register_blueprints(
     app.register_blueprint(consolidation_bp)
     app.register_blueprint(graph_bp)
     app.register_blueprint(stream_bp)
-    app.register_blueprint(observer_bp)
 
     if is_viewer_enabled():
         viewer_bp = create_viewer_blueprint()

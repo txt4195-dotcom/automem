@@ -1548,23 +1548,6 @@ def handle_recall(
                     result["jit_enriched"] = True
                     jit_enriched_count += 1
 
-    # v2: Observer-weighted re-ranking
-    observer_id = request.args.get("observer_id")
-    observer_applied = False
-    if observer_id and graph and results and utc_now_fn:
-        try:
-            from automem.observer.recall import rerank_with_observer
-
-            results = rerank_with_observer(
-                graph=graph,
-                results=results,
-                observer_id=observer_id,
-                timestamp=utc_now_fn(),
-            )
-            observer_applied = True
-        except Exception:
-            logger.debug("Observer reranking failed for %s (non-fatal)", observer_id)
-
     response = {
         "status": "success",
         "query": query_text,
@@ -1622,8 +1605,6 @@ def handle_recall(
             "priority_types": sorted(any_context_profile.get("priority_types") or []),
             "injected": any_context_injected,
         }
-    if observer_applied:
-        response["observer"] = {"id": observer_id, "applied": True}
 
     logger.info(
         "recall_complete",

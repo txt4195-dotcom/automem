@@ -156,9 +156,7 @@ def enrich_memory(
     find_temporal_relationships_fn: Callable[[Any, str], int],
     detect_patterns_fn: Callable[[Any, str, str], List[Dict[str, Any]]],
     link_semantic_neighbors_fn: Callable[[Any, str], List[Tuple[str, float]]],
-    score_semantic_edges_fn: Optional[Callable[..., int]],
     score_node_fn: Optional[Callable[[Any, str, str], bool]],
-    observer_reverse_inference_fn: Optional[Callable[[Any, str, List[Tuple[str, float]], List[str], float], None]],
     enrichment_enable_summaries: bool,
     generate_summary_fn: Callable[[str, Any], Any],
     utc_now_fn: Callable[[], str],
@@ -257,27 +255,6 @@ def enrich_memory(
         except Exception:
             logger.exception("Stance scoring failed for %s (non-fatal, will retry)", memory_id)
 
-    # v2: Score edges across 67 dimensions using LLM (nano)
-    edge_score_count = 0
-    if score_semantic_edges_fn and semantic_neighbors:
-        try:
-            edge_score_count = score_semantic_edges_fn(
-                graph, memory_id, content, semantic_neighbors,
-            )
-        except Exception:
-            logger.exception("Edge scoring failed for %s (non-fatal)", memory_id)
-
-    # v2: Observer reverse inference — backpropagate observer from what was stored
-    # importance = significance (error magnitude for gradient scaling)
-    if observer_reverse_inference_fn and edge_score_count > 0 and semantic_neighbors:
-        try:
-            mem_importance = float(properties.get("importance", 0.5))
-            observer_reverse_inference_fn(
-                graph, memory_id, semantic_neighbors, tags, mem_importance,
-            )
-        except Exception:
-            logger.debug("Observer reverse inference failed for %s (non-fatal)", memory_id)
-
     if enrichment_enable_summaries:
         existing_summary = properties.get("summary")
         summary = generate_summary_fn(content, None if forced else existing_summary)
@@ -296,7 +273,6 @@ def enrich_memory(
             "semantic_neighbors": [
                 {"id": neighbour_id, "score": score} for neighbour_id, score in semantic_neighbors
             ],
-            "edge_scores_created": edge_score_count,
         }
     )
     metadata["enrichment"] = enrichment_meta
@@ -347,12 +323,11 @@ def enrich_memory(
             logger.exception("Failed to sync Qdrant payload for enriched memory %s", memory_id)
 
     logger.debug(
-        "Enriched memory %s (temporal=%s, patterns=%s, semantic=%s, edge_scores=%s)",
+        "Enriched memory %s (temporal=%s, patterns=%s, semantic=%s)",
         memory_id,
         temporal_links,
         pattern_info,
         len(semantic_neighbors),
-        edge_score_count,
     )
 
     return True

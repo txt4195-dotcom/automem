@@ -43,7 +43,7 @@ TOTAL_NODE_DIMENSIONS = len(ALL_NODE_DIMENSIONS)  # 7
 def initial_alpha_beta(score: float) -> Tuple[float, float]:
     """Convert a nano score (0..1) into initial Bayesian alpha, beta.
 
-    Same logic as edge_scoring: higher certainty (distance from 0.5)
+    Higher certainty (distance from 0.5)
     gets higher total evidence.
     """
     certainty = abs(score - 0.5) * 2  # 0..1

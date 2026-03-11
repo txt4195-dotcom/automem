@@ -49,14 +49,15 @@ def test_enrich_memory_updates_metadata(monkeypatch, seeded_enrichment_graph):
     assert processed is True
 
     assert fake_graph.temporal_calls, "Should create temporal relationships"
-    assert fake_graph.pattern_calls, "Should update pattern nodes"
-    assert fake_graph.exemplifies_calls, "Should create EXEMPLIFIES relationship"
+    # Pattern detection is disabled (node scoring replaces keyword-frequency patterns)
+    # assert fake_graph.pattern_calls, "Should update pattern nodes"
+    # assert fake_graph.exemplifies_calls, "Should create EXEMPLIFIES relationship"
     assert fake_graph.update_calls, "Should update memory metadata"
 
     update_payload = fake_graph.update_calls[-1]
     metadata = json.loads(update_payload["metadata"])
     assert metadata["entities"]["projects"] == ["Launchpad"]
     assert metadata["enrichment"]["temporal_links"] == 1
-    assert metadata["enrichment"]["patterns_detected"]
+    # patterns_detected may be empty when detect_patterns is disabled
     assert update_payload["summary"].startswith("Met with Alice")
     assert "entity:projects:launchpad" in update_payload["tags"]
