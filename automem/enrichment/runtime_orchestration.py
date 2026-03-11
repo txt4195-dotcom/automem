@@ -57,9 +57,6 @@ def jit_enrich_lightweight(
     if not isinstance(metadata, dict):
         metadata = {"_raw_metadata": metadata}
 
-    # Categories that generate entity tags (organizations/concepts excluded — too noisy from spaCy)
-    _ENTITY_TAG_CATEGORIES = {"people", "tools", "projects"}
-
     if entities:
         entities_section = metadata.setdefault("entities", {})
         if not isinstance(entities_section, dict):
@@ -68,11 +65,10 @@ def jit_enrich_lightweight(
             if not values:
                 continue
             entities_section[category] = sorted(values)
-            if category in _ENTITY_TAG_CATEGORIES:
-                for value in values:
-                    slug = slugify_fn(value)
-                    if slug:
-                        entity_tags.add(f"entity:{category}:{slug}")
+            for value in values:
+                slug = slugify_fn(value)
+                if slug:
+                    entity_tags.add(f"entity:{category}:{slug}")
         metadata["entities"] = entities_section
 
     if entity_tags:
@@ -198,9 +194,6 @@ def enrich_memory(
     tags = list(dict.fromkeys(normalize_tag_list_fn(properties.get("tags"))))
     entity_tags: Set[str] = set()
 
-    # Categories that generate entity tags (organizations/concepts excluded — too noisy from spaCy)
-    _ENTITY_TAG_CATEGORIES = {"people", "tools", "projects"}
-
     if entities:
         entities_section = metadata.setdefault("entities", {})
         if not isinstance(entities_section, dict):
@@ -209,11 +202,10 @@ def enrich_memory(
             if not values:
                 continue
             entities_section[category] = sorted(values)
-            if category in _ENTITY_TAG_CATEGORIES:
-                for value in values:
-                    slug = slugify_fn(value)
-                    if slug:
-                        entity_tags.add(f"entity:{category}:{slug}")
+            for value in values:
+                slug = slugify_fn(value)
+                if slug:
+                    entity_tags.add(f"entity:{category}:{slug}")
         metadata["entities"] = entities_section
 
     if entity_tags:
