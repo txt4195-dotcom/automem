@@ -1,0 +1,692 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AutoMem Recall Inspector</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #c9d1d9; --dim: #8b949e; --accent: #58a6ff;
+    --green: #3fb950; --red: #f85149; --yellow: #d29922; --purple: #bc8cff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'SF Mono', 'Fira Code', monospace; background: var(--bg); color: var(--text); padding: 20px; }
+  h1 { font-size: 16px; color: var(--accent); margin-bottom: 16px; }
+  .controls { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
+  input, select, button { font-family: inherit; font-size: 13px; padding: 6px 10px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 4px; }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+  input[type=text] { flex: 1; min-width: 200px; }
+  button { cursor: pointer; background: var(--accent); color: #000; border: none; font-weight: 600; }
+  button:hover { opacity: 0.85; }
+
+  .meta { font-size: 11px; color: var(--dim); margin-bottom: 12px; display: flex; gap: 16px; flex-wrap: wrap; }
+  .meta span { background: var(--surface); padding: 2px 8px; border-radius: 3px; }
+  .meta .warn { color: var(--yellow); }
+
+  .results { display: flex; gap: 16px; }
+  .result-col { flex: 1; min-width: 0; }
+  .col-title { font-size: 12px; color: var(--dim); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px; }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-bottom: 10px; position: relative; }
+  .card.filtered { opacity: 0.4; border-color: var(--red); }
+  .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .card-rank { font-size: 20px; font-weight: 700; color: var(--accent); }
+  .card-score { font-size: 14px; font-weight: 600; }
+  .card-content { font-size: 12px; color: var(--dim); margin-bottom: 10px; line-height: 1.5; max-height: 60px; overflow: hidden; }
+  .card-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 8px; }
+  .tag { font-size: 10px; padding: 1px 6px; border-radius: 3px; background: #1f2937; color: var(--dim); }
+  .tag.type { color: var(--purple); border: 1px solid var(--purple); background: transparent; }
+  .filtered-badge { position: absolute; top: 8px; right: 8px; font-size: 9px; color: var(--red); font-weight: 700; }
+
+  .waterfall { height: 20px; display: flex; border-radius: 3px; overflow: hidden; margin-bottom: 4px; }
+  .wf-seg { height: 100%; min-width: 1px; transition: width 0.3s; }
+
+  .legend { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; font-size: 10px; }
+  .legend-item { display: flex; align-items: center; gap: 3px; }
+  .legend-swatch { width: 10px; height: 10px; border-radius: 2px; }
+
+  .score-detail { font-size: 10px; color: var(--dim); display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 2px 12px; }
+  .score-detail .positive { color: var(--green); }
+  .score-detail .negative { color: var(--red); }
+  .score-detail .zero { color: #484f58; }
+
+  .compare-diff { font-size: 11px; margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border); }
+  .up { color: var(--green); }
+  .down { color: var(--red); }
+
+  .pipeline { margin-bottom: 16px; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; font-size: 11px; color: var(--dim); }
+  .pipeline .active { color: var(--green); }
+  .pipeline .count { color: var(--accent); font-weight: 600; }
+  .pipeline .arrow { color: #484f58; margin: 0 4px; }
+
+  .tooltip { position: absolute; bottom: 100%; left: 0; font-size: 10px; white-space: nowrap; background: #000; padding: 2px 6px; border-radius: 3px; z-index: 10; display: none; pointer-events: none; color: var(--text); }
+
+  #loading { display: none; color: var(--yellow); font-size: 12px; margin-top: 8px; }
+
+  .feedback-row { display: flex; gap: 6px; margin-top: 8px; align-items: center; }
+  .fb-btn { font-size: 14px; padding: 3px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; color: var(--dim); transition: all 0.15s; }
+  .fb-btn:hover { border-color: var(--accent); color: var(--text); }
+  .fb-btn.sent { pointer-events: none; }
+  .fb-btn.active-helpful { border-color: var(--green); color: var(--green); background: rgba(63,185,80,0.15); }
+  .fb-btn.active-opposite { border-color: var(--red); color: var(--red); background: rgba(248,81,73,0.15); }
+  .fb-btn.active-irrelevant { border-color: var(--dim); background: rgba(139,148,158,0.15); }
+  .fb-btn.dim { opacity: 0.25; }
+  .fb-status { font-size: 10px; color: var(--dim); margin-left: 4px; }
+
+  .lens-delta { margin-top: 6px; padding: 8px; background: #0d1117; border: 1px solid var(--border); border-radius: 4px; font-size: 10px; }
+  .lens-delta-header { display: flex; justify-content: space-between; margin-bottom: 4px; }
+  .lens-delta-title { color: var(--accent); font-weight: 600; }
+  .lens-delta-summary { color: var(--dim); }
+  .lens-axis { display: flex; gap: 8px; padding: 2px 0; align-items: center; }
+  .lens-axis .ax-name { color: var(--dim); min-width: 85px; }
+  .lens-axis .ax-bar { flex: 1; height: 10px; background: #1c2128; border-radius: 2px; position: relative; overflow: hidden; }
+  .lens-axis .ax-fill-before { position: absolute; height: 100%; background: #484f58; border-radius: 2px; }
+  .lens-axis .ax-fill-after { position: absolute; height: 100%; border-radius: 2px; }
+  .lens-axis .ax-vals { font-size: 9px; color: var(--dim); min-width: 100px; text-align: right; }
+  .lens-axis .ax-delta { font-weight: 600; min-width: 55px; text-align: right; }
+  .lens-axis .ax-delta.pos { color: var(--green); }
+  .lens-axis .ax-delta.neg { color: var(--red); }
+</style>
+</head>
+<body>
+
+<h1>AutoMem Recall Inspector</h1>
+
+<div class="controls">
+  <select id="endpoint">
+    <option value="http://localhost:8001">Local :8001</option>
+    <option value="https://automem-production-2144.up.railway.app">Production</option>
+  </select>
+  <input type="text" id="query" placeholder="Query..." value="healthcare policy">
+  <input type="text" id="user_id" placeholder="user_id (optional)" value="test_user" style="max-width:160px">
+  <input type="number" id="limit" value="10" min="1" max="50" style="width:60px">
+  <input type="text" id="api-token" placeholder="API Token" style="max-width:200px;font-size:11px">
+  <label style="font-size:11px;color:var(--dim);display:flex;align-items:center;gap:4px">
+    <input type="checkbox" id="compare" checked> Compare ±profile
+  </label>
+  <button id="recall-btn">Recall</button>
+</div>
+
+<div id="loading">Querying...</div>
+
+<div class="legend" id="legend"></div>
+<div id="pipeline-display"></div>
+<div id="meta-display"></div>
+<div id="results-display" class="results"></div>
+
+<script>
+const COLORS = {
+  vector: '#58a6ff', keyword: '#3fb950', tag: '#d29922', recency: '#bc8cff',
+  importance: '#f778ba', confidence: '#79c0ff', profile: '#ff7b72',
+  relation: '#ffa657', exact: '#7ee787', relevance: '#a5d6ff', context: '#484f58'
+};
+
+const WEIGHTS = {
+  vector: 0.35, keyword: 0.35, tag: 0.20, recency: 0.10,
+  importance: 0.10, confidence: 0.05, profile: 0.15,
+  relation: 0.25, exact: 0.20, relevance: 0.0, context: 0.0
+};
+
+let lastRecallUserId = null;
+
+// Restore saved token
+(function() {
+  const saved = localStorage.getItem('automem_api_token');
+  if (saved) document.getElementById('api-token').value = saved;
+})();
+
+function getToken() {
+  const t = document.getElementById('api-token').value.trim();
+  localStorage.setItem('automem_api_token', t);
+  return t;
+}
+
+function getAuthHeaders(baseUrl) {
+  const headers = { 'Accept': 'application/json', 'Content-Type': 'application/json' };
+  const token = getToken();
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  return headers;
+}
+
+async function sendFeedback(memoryId, signal, containerEl) {
+  const baseUrl = document.getElementById('endpoint').value;
+  const userId = lastRecallUserId || document.getElementById('user_id').value;
+  const statusEl = containerEl.querySelector('.fb-status');
+
+  // Mark buttons
+  const buttons = containerEl.querySelectorAll('.fb-btn');
+  buttons.forEach(function(btn) {
+    btn.classList.add('sent');
+    if (btn.dataset.signal === signal) {
+      btn.classList.add('active-' + signal.replace('_', '-').replace('opposite-view', 'opposite').replace('not-relevant', 'irrelevant'));
+      if (signal === 'helpful') btn.classList.add('active-helpful');
+      else if (signal === 'opposite_view') btn.classList.add('active-opposite');
+      else btn.classList.add('active-irrelevant');
+    } else {
+      btn.classList.add('dim');
+    }
+  });
+  if (statusEl) statusEl.textContent = 'sending...';
+
+  try {
+    const resp = await fetch(baseUrl + '/feedback', {
+      method: 'POST',
+      headers: getAuthHeaders(baseUrl),
+      body: JSON.stringify({ memory_id: memoryId, signal: signal, user_id: userId || undefined }),
+    });
+    const data = await resp.json();
+
+    if (statusEl) {
+      if (data.status === 'updated') {
+        statusEl.textContent = data.summary.axes_updated + ' axes, max delta ' + data.summary.max_delta.toFixed(4);
+        statusEl.style.color = 'var(--green)';
+      } else {
+        statusEl.textContent = data.status + (data.reason ? ': ' + data.reason : '');
+        statusEl.style.color = 'var(--dim)';
+      }
+    }
+
+    // Render lens delta visualization
+    if (data.updates && Object.keys(data.updates).length > 0) {
+      containerEl.appendChild(createLensDelta(data.updates, data.summary));
+    }
+  } catch (err) {
+    if (statusEl) {
+      statusEl.textContent = 'error: ' + err.message;
+      statusEl.style.color = 'var(--red)';
+    }
+  }
+}
+
+function createFeedbackRow(memoryId) {
+  const row = document.createElement('div');
+  row.className = 'feedback-row';
+
+  var signals = [
+    { signal: 'helpful', label: '+', title: 'Helpful - align lens toward this memory' },
+    { signal: 'opposite_view', label: '-', title: 'Opposite view - align lens away from this' },
+    { signal: 'not_relevant', label: '0', title: 'Not relevant - no lens update' },
+  ];
+
+  signals.forEach(function(s) {
+    var btn = document.createElement('button');
+    btn.className = 'fb-btn';
+    btn.dataset.signal = s.signal;
+    btn.textContent = s.label;
+    btn.title = s.title;
+    btn.addEventListener('click', function() { sendFeedback(memoryId, s.signal, row); });
+    row.appendChild(btn);
+  });
+
+  var status = document.createElement('span');
+  status.className = 'fb-status';
+  row.appendChild(status);
+  return row;
+}
+
+function createLensDelta(updates, summary) {
+  var container = document.createElement('div');
+  container.className = 'lens-delta';
+
+  var header = document.createElement('div');
+  header.className = 'lens-delta-header';
+  var title = document.createElement('span');
+  title.className = 'lens-delta-title';
+  title.textContent = 'Lens Update';
+  var summ = document.createElement('span');
+  summ.className = 'lens-delta-summary';
+  summ.textContent = summary.axes_updated + ' axes, max ' + summary.max_delta.toFixed(4);
+  header.appendChild(title);
+  header.appendChild(summ);
+  container.appendChild(header);
+
+  var entries = Object.entries(updates).sort(function(a, b) {
+    return Math.abs(b[1].delta_p) - Math.abs(a[1].delta_p);
+  });
+
+  entries.forEach(function(entry) {
+    var key = entry[0], u = entry[1];
+    var row = document.createElement('div');
+    row.className = 'lens-axis';
+
+    var name = document.createElement('span');
+    name.className = 'ax-name';
+    name.textContent = key;
+    row.appendChild(name);
+
+    // Bar showing before→after
+    var bar = document.createElement('div');
+    bar.className = 'ax-bar';
+    var bSum = u.before[0] + u.before[1];
+    var aSum = u.after[0] + u.after[1];
+    var pBefore = bSum > 0 ? (u.before[0] / bSum) : 0.5;
+    var pAfter = aSum > 0 ? (u.after[0] / aSum) : 0.5;
+
+    var fillBefore = document.createElement('div');
+    fillBefore.className = 'ax-fill-before';
+    fillBefore.style.width = (pBefore * 100) + '%';
+    bar.appendChild(fillBefore);
+
+    var fillAfter = document.createElement('div');
+    fillAfter.className = 'ax-fill-after';
+    fillAfter.style.width = (pAfter * 100) + '%';
+    fillAfter.style.background = u.delta_p > 0 ? 'var(--green)' : 'var(--red)';
+    fillAfter.style.opacity = '0.7';
+    bar.appendChild(fillAfter);
+
+    row.appendChild(bar);
+
+    var vals = document.createElement('span');
+    vals.className = 'ax-vals';
+    vals.textContent = '[' + u.before[0] + ',' + u.before[1] + '] > [' + u.after[0] + ',' + u.after[1] + ']';
+    row.appendChild(vals);
+
+    var delta = document.createElement('span');
+    delta.className = 'ax-delta ' + (u.delta_p > 0 ? 'pos' : 'neg');
+    delta.textContent = (u.delta_p > 0 ? '+' : '') + u.delta_p.toFixed(4);
+    row.appendChild(delta);
+
+    container.appendChild(row);
+  });
+
+  return container;
+}
+
+// Build legend
+(function buildLegend() {
+  const container = document.getElementById('legend');
+  for (const [key, color] of Object.entries(COLORS)) {
+    const item = document.createElement('div');
+    item.className = 'legend-item';
+    const swatch = document.createElement('div');
+    swatch.className = 'legend-swatch';
+    swatch.style.background = color;
+    item.appendChild(swatch);
+    item.appendChild(document.createTextNode(key));
+    container.appendChild(item);
+  }
+})();
+
+async function fetchRecall(baseUrl, query, userId, limit) {
+  const params = new URLSearchParams({ query, limit: String(limit) });
+  if (userId) params.set('user_id', userId);
+
+  const headers = { 'Accept': 'application/json' };
+  const token = getToken();
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+
+  const resp = await fetch(baseUrl + '/recall?' + params.toString(), { headers });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error(err.message || 'HTTP ' + resp.status);
+  }
+  return resp.json();
+}
+
+function createWaterfall(components) {
+  const container = document.createElement('div');
+  container.className = 'waterfall';
+
+  let total = 0;
+  const weighted = {};
+  for (const [k, v] of Object.entries(components)) {
+    const w = WEIGHTS[k] || 0;
+    weighted[k] = v * w;
+    total += Math.abs(weighted[k]);
+  }
+  if (total === 0) total = 1;
+
+  for (const [k, v] of Object.entries(weighted)) {
+    const pct = Math.max(Math.abs(v) / total * 100, 0);
+    if (pct < 0.5) continue;
+    const seg = document.createElement('div');
+    seg.className = 'wf-seg';
+    seg.style.width = pct + '%';
+    seg.style.background = COLORS[k] || '#484f58';
+    if (v < 0) seg.style.opacity = '0.4';
+    seg.title = k + ': ' + components[k].toFixed(3) + ' × ' + (WEIGHTS[k] || 0) + ' = ' + v.toFixed(4);
+    container.appendChild(seg);
+  }
+  return container;
+}
+
+function createScoreDetail(components) {
+  const grid = document.createElement('div');
+  grid.className = 'score-detail';
+  for (const [k, v] of Object.entries(components)) {
+    const w = WEIGHTS[k] || 0;
+    const contribution = v * w;
+    const span = document.createElement('span');
+    span.className = contribution > 0.001 ? 'positive' : contribution < -0.001 ? 'negative' : 'zero';
+    span.textContent = k + ': ' + v.toFixed(3) + '×' + w + '=' + contribution.toFixed(4);
+    grid.appendChild(span);
+  }
+  return grid;
+}
+
+function createCard(r, rank, adaptiveFloor) {
+  const card = document.createElement('div');
+  card.className = 'card';
+  const isFiltered = r.score < (adaptiveFloor || 0);
+  if (isFiltered) card.classList.add('filtered');
+
+  const mem = r.memory || {};
+
+  // Header
+  const header = document.createElement('div');
+  header.className = 'card-header';
+  const rankEl = document.createElement('span');
+  rankEl.className = 'card-rank';
+  rankEl.textContent = '#' + rank;
+  const scoreEl = document.createElement('span');
+  scoreEl.className = 'card-score';
+  scoreEl.style.color = isFiltered ? 'var(--red)' : 'var(--green)';
+  scoreEl.textContent = r.score.toFixed(4);
+  header.appendChild(rankEl);
+  header.appendChild(scoreEl);
+  card.appendChild(header);
+
+  if (isFiltered) {
+    const badge = document.createElement('span');
+    badge.className = 'filtered-badge';
+    badge.textContent = 'FILTERED';
+    card.appendChild(badge);
+  }
+
+  // Tags
+  const tagsDiv = document.createElement('div');
+  tagsDiv.className = 'card-tags';
+  const typeTag = document.createElement('span');
+  typeTag.className = 'tag type';
+  typeTag.textContent = mem.type || '?';
+  tagsDiv.appendChild(typeTag);
+  for (const t of (mem.tags || [])) {
+    const tag = document.createElement('span');
+    tag.className = 'tag';
+    tag.textContent = t;
+    tagsDiv.appendChild(tag);
+  }
+  card.appendChild(tagsDiv);
+
+  // Content
+  const contentDiv = document.createElement('div');
+  contentDiv.className = 'card-content';
+  const text = mem.content || '';
+  contentDiv.textContent = text.length > 200 ? text.substring(0, 200) + '...' : text;
+  card.appendChild(contentDiv);
+
+  // Waterfall + detail
+  card.appendChild(createWaterfall(r.score_components || {}));
+  card.appendChild(createScoreDetail(r.score_components || {}));
+
+  // Feedback buttons
+  var memId = r.id || (mem.id);
+  if (memId) card.appendChild(createFeedbackRow(memId));
+
+  return card;
+}
+
+function createPipeline(data) {
+  const div = document.createElement('div');
+  div.className = 'pipeline';
+
+  const vs = data.vector_search || {};
+  const sf = data.score_filter || {};
+  const totalResults = (data.results || []).length;
+  const filtered = sf.filtered_count || 0;
+  const floor = sf.adaptive_floor;
+
+  const steps = [
+    { text: 'Vector Search ' + (vs.matched ? '✓' : '✗'), active: vs.enabled },
+    { text: 'Scoring ', count: String(totalResults + filtered) + ' candidates', active: true },
+    { text: 'Adaptive Floor ' + (floor ? floor.toFixed(4) : 'off'), active: !!floor },
+    { text: filtered > 0 ? 'Filtered ' + filtered : 'No filtering', active: filtered === 0, warn: filtered > 0 },
+    { text: '', count: totalResults + ' returned (' + (data.query_time_ms?.toFixed(0) || '?') + 'ms)', active: true }
+  ];
+
+  steps.forEach((s, i) => {
+    if (i > 0) {
+      const arrow = document.createElement('span');
+      arrow.className = 'arrow';
+      arrow.textContent = ' → ';
+      div.appendChild(arrow);
+    }
+    const step = document.createElement('span');
+    if (s.active) step.classList.add('active');
+    if (s.warn) step.style.color = 'var(--red)';
+    step.textContent = s.text;
+    if (s.count) {
+      const c = document.createElement('span');
+      c.className = 'count';
+      c.textContent = s.count;
+      step.appendChild(c);
+    }
+    div.appendChild(step);
+  });
+
+  return div;
+}
+
+function createMeta(data) {
+  const div = document.createElement('div');
+  div.className = 'meta';
+  const items = [
+    'query: "' + data.query + '"',
+    'keywords: [' + (data.keywords || []).join(', ') + ']',
+    'sort: ' + data.sort
+  ];
+  for (const item of items) {
+    const span = document.createElement('span');
+    span.textContent = item;
+    div.appendChild(span);
+  }
+  if (data.dedup_removed) {
+    const span = document.createElement('span');
+    span.className = 'warn';
+    span.textContent = 'dedup removed: ' + data.dedup_removed;
+    div.appendChild(span);
+  }
+  return div;
+}
+
+function createCompareCard(wp, wop, rank) {
+  const card = document.createElement('div');
+  card.className = 'card';
+  const r = wp || wop;
+  const mem = r.memory || {};
+  const floor = wp ? wp._adaptive_floor : (wop ? wop._adaptive_floor : 0);
+  if (r.score < (floor || 0)) card.classList.add('filtered');
+
+  // Header
+  const header = document.createElement('div');
+  header.className = 'card-header';
+  const rankEl = document.createElement('span');
+  rankEl.className = 'card-rank';
+  rankEl.textContent = '#' + rank;
+  const scoreEl = document.createElement('span');
+  scoreEl.className = 'card-score';
+  scoreEl.textContent = (wp ? wp.score.toFixed(4) : '—') + ' / ' + (wop ? wop.score.toFixed(4) : '—');
+  header.appendChild(rankEl);
+  header.appendChild(scoreEl);
+  card.appendChild(header);
+
+  // Tags
+  const tagsDiv = document.createElement('div');
+  tagsDiv.className = 'card-tags';
+  const typeTag = document.createElement('span');
+  typeTag.className = 'tag type';
+  typeTag.textContent = mem.type || '?';
+  tagsDiv.appendChild(typeTag);
+  for (const t of (mem.tags || [])) {
+    const tag = document.createElement('span');
+    tag.className = 'tag';
+    tag.textContent = t;
+    tagsDiv.appendChild(tag);
+  }
+  card.appendChild(tagsDiv);
+
+  // Content
+  const contentDiv = document.createElement('div');
+  contentDiv.className = 'card-content';
+  const text = mem.content || '';
+  contentDiv.textContent = text.length > 200 ? text.substring(0, 200) + '...' : text;
+  card.appendChild(contentDiv);
+
+  // With profile waterfall
+  const wpLabel = document.createElement('div');
+  wpLabel.style.cssText = 'font-size:10px;color:var(--dim);margin-bottom:4px';
+  wpLabel.textContent = 'With profile:';
+  card.appendChild(wpLabel);
+  if (wp) {
+    card.appendChild(createWaterfall(wp.score_components || {}));
+  } else {
+    const missing = document.createElement('div');
+    missing.style.cssText = 'font-size:10px;color:var(--red)';
+    missing.textContent = 'not in results';
+    card.appendChild(missing);
+  }
+
+  // Without profile waterfall
+  const wopLabel = document.createElement('div');
+  wopLabel.style.cssText = 'font-size:10px;color:var(--dim);margin-bottom:4px;margin-top:6px';
+  wopLabel.textContent = 'Without profile:';
+  card.appendChild(wopLabel);
+  if (wop) {
+    card.appendChild(createWaterfall(wop.score_components || {}));
+  } else {
+    const missing = document.createElement('div');
+    missing.style.cssText = 'font-size:10px;color:var(--red)';
+    missing.textContent = 'not in results';
+    card.appendChild(missing);
+  }
+
+  // Diff
+  if (wp && wop) {
+    const diff = document.createElement('div');
+    diff.className = 'compare-diff';
+    const scoreDiff = wp.score - wop.score;
+    const profileVal = (wp.score_components || {}).profile || 0;
+
+    const deltaSpan = document.createElement('span');
+    deltaSpan.className = scoreDiff > 0 ? 'up' : scoreDiff < 0 ? 'down' : '';
+    deltaSpan.textContent = (scoreDiff > 0 ? '+' : '') + scoreDiff.toFixed(4);
+
+    diff.appendChild(document.createTextNode('Δscore: '));
+    diff.appendChild(deltaSpan);
+    diff.appendChild(document.createTextNode(' | profile: ' + profileVal.toFixed(4)));
+    diff.appendChild(document.createTextNode(' | rank: ' + (wop._rank || '?') + ' → ' + (wp._rank || '?')));
+    card.appendChild(diff);
+  }
+
+  // Feedback buttons
+  var memId = r.id || (mem.id);
+  if (memId) card.appendChild(createFeedbackRow(memId));
+
+  return card;
+}
+
+async function runRecall() {
+  const baseUrl = document.getElementById('endpoint').value;
+  const query = document.getElementById('query').value;
+  const userId = document.getElementById('user_id').value;
+  const limit = parseInt(document.getElementById('limit').value);
+  const doCompare = document.getElementById('compare').checked;
+
+  lastRecallUserId = userId;
+  document.getElementById('loading').style.display = 'block';
+
+  // Clear previous results
+  const pipelineEl = document.getElementById('pipeline-display');
+  const metaEl = document.getElementById('meta-display');
+  const resultsEl = document.getElementById('results-display');
+  pipelineEl.replaceChildren();
+  metaEl.replaceChildren();
+  resultsEl.replaceChildren();
+
+  try {
+    const dataWith = await fetchRecall(baseUrl, query, userId, limit);
+
+    if (!doCompare || !userId) {
+      pipelineEl.appendChild(createPipeline(dataWith));
+      metaEl.appendChild(createMeta(dataWith));
+
+      const floor = dataWith.score_filter?.adaptive_floor || 0;
+      const col = document.createElement('div');
+      col.className = 'result-col';
+      const title = document.createElement('div');
+      title.className = 'col-title';
+      title.textContent = 'Results';
+      col.appendChild(title);
+      (dataWith.results || []).forEach((r, i) => col.appendChild(createCard(r, i + 1, floor)));
+      resultsEl.appendChild(col);
+    } else {
+      const dataWithout = await fetchRecall(baseUrl, query, '', limit);
+
+      // Pipeline side by side
+      const pipeRow = document.createElement('div');
+      pipeRow.style.cssText = 'display:flex;gap:16px';
+      const pipeLeft = document.createElement('div');
+      pipeLeft.style.flex = '1';
+      const plTitle = document.createElement('div');
+      plTitle.className = 'col-title';
+      plTitle.textContent = 'With Profile';
+      pipeLeft.appendChild(plTitle);
+      pipeLeft.appendChild(createPipeline(dataWith));
+      const pipeRight = document.createElement('div');
+      pipeRight.style.flex = '1';
+      const prTitle = document.createElement('div');
+      prTitle.className = 'col-title';
+      prTitle.textContent = 'Without Profile';
+      pipeRight.appendChild(prTitle);
+      pipeRight.appendChild(createPipeline(dataWithout));
+      pipeRow.appendChild(pipeLeft);
+      pipeRow.appendChild(pipeRight);
+      pipelineEl.appendChild(pipeRow);
+
+      metaEl.appendChild(createMeta(dataWith));
+
+      // Merge results
+      const allIds = new Set();
+      const withMap = {};
+      const withoutMap = {};
+      (dataWith.results || []).forEach((r, i) => {
+        r._rank = i + 1;
+        r._adaptive_floor = dataWith.score_filter?.adaptive_floor || 0;
+        withMap[r.id] = r;
+        allIds.add(r.id);
+      });
+      (dataWithout.results || []).forEach((r, i) => {
+        r._rank = i + 1;
+        r._adaptive_floor = dataWithout.score_filter?.adaptive_floor || 0;
+        withoutMap[r.id] = r;
+        allIds.add(r.id);
+      });
+
+      const sorted = [...allIds].sort((a, b) => (withMap[b]?.score || 0) - (withMap[a]?.score || 0));
+
+      const col = document.createElement('div');
+      col.className = 'result-col';
+      const colTitle = document.createElement('div');
+      colTitle.className = 'col-title';
+      colTitle.textContent = 'Comparison (with / without profile)';
+      col.appendChild(colTitle);
+      sorted.forEach((id, i) => col.appendChild(createCompareCard(withMap[id], withoutMap[id], i + 1)));
+      resultsEl.appendChild(col);
+    }
+  } catch (err) {
+    const errDiv = document.createElement('div');
+    errDiv.style.color = 'var(--red)';
+    errDiv.textContent = 'Error: ' + err.message;
+    resultsEl.appendChild(errDiv);
+  } finally {
+    document.getElementById('loading').style.display = 'none';
+  }
+}
+
+document.getElementById('recall-btn').addEventListener('click', runRecall);
+document.getElementById('query').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') runRecall();
+});
+</script>
+</body>
+</html>

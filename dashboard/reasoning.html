@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AutoMem Reasoning Inspector</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #c9d1d9; --dim: #8b949e; --accent: #58a6ff;
+    --green: #3fb950; --red: #f85149; --yellow: #d29922; --purple: #bc8cff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'SF Mono', 'Fira Code', monospace; background: var(--bg); color: var(--text); padding: 20px; max-width: 1400px; margin: 0 auto; }
+  h1 { font-size: 16px; color: var(--accent); margin-bottom: 4px; }
+  .subtitle { font-size: 11px; color: var(--dim); margin-bottom: 16px; }
+  .controls { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
+  input, select, button { font-family: inherit; font-size: 13px; padding: 6px 10px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 4px; }
+  input:focus { outline: none; border-color: var(--accent); }
+  input[type=text] { flex: 1; min-width: 200px; }
+  button { cursor: pointer; background: var(--accent); color: #000; border: none; font-weight: 600; }
+  button:hover { opacity: 0.85; }
+  .stats { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+  .stat { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 10px 16px; text-align: center; }
+  .stat-value { font-size: 24px; font-weight: 700; color: var(--accent); }
+  .stat-label { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 16px; }
+  .tab { padding: 6px 14px; font-size: 12px; cursor: pointer; border: 1px solid var(--border); border-radius: 4px 4px 0 0; background: var(--surface); color: var(--dim); }
+  .tab.active { background: var(--bg); color: var(--accent); border-bottom-color: var(--bg); }
+  .panel { display: none; }
+  .panel.active { display: block; }
+  .compare-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .compare-col { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 12px; }
+  .compare-title { font-size: 12px; color: var(--dim); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px; }
+  .memory-detail { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 16px; margin-bottom: 12px; }
+  .memory-detail h3 { font-size: 13px; color: var(--accent); margin-bottom: 8px; }
+  .field-label { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px; margin-top: 10px; margin-bottom: 4px; }
+  .field-value { font-size: 12px; color: var(--text); line-height: 1.6; padding: 8px; background: var(--bg); border-radius: 4px; white-space: pre-wrap; word-break: break-word; }
+  .field-value.reasoning { border-left: 3px solid var(--purple); }
+  .field-value.content-field { border-left: 3px solid var(--accent); }
+  .tag { font-size: 10px; padding: 2px 6px; border-radius: 3px; background: #1f2937; color: var(--dim); display: inline-block; margin: 2px; }
+  .coverage-bar { height: 20px; background: var(--bg); border-radius: 3px; overflow: hidden; margin-bottom: 8px; }
+  .coverage-fill { height: 100%; border-radius: 3px; transition: width 0.3s; }
+  .coverage-row { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+  .coverage-label { font-size: 11px; color: var(--dim); width: 120px; }
+  .coverage-pct { font-size: 11px; font-weight: 700; width: 40px; text-align: right; }
+  .loading { color: var(--dim); font-size: 12px; padding: 20px; text-align: center; }
+  .error { color: var(--red); font-size: 12px; padding: 10px; }
+  .result-card { padding: 8px; margin-bottom: 6px; border-radius: 4px; border: 1px solid var(--border); font-size: 12px; line-height: 1.5; cursor: pointer; }
+  .result-card:hover { border-color: var(--accent); }
+  .has-reasoning { border-left: 3px solid var(--purple); }
+  .no-reasoning { border-left: 3px solid var(--dim); }
+</style>
+</head>
+<body>
+
+<h1>Reasoning-in-Vectors Inspector</h1>
+<p class="subtitle">Compare recall quality &middot; Monitor reasoning enrichment coverage</p>
+
+<div class="controls">
+  <input type="text" id="apiUrl" value="http://localhost:8001" placeholder="AutoMem URL" style="max-width:200px">
+  <input type="text" id="apiToken" placeholder="API Token" style="max-width:160px">
+  <button onclick="loadStats()">Connect</button>
+</div>
+
+<div class="stats" id="statsBar"></div>
+
+<div class="tabs" id="tabBar"></div>
+
+<div id="panel-compare" class="panel active"></div>
+<div id="panel-browse" class="panel"></div>
+<div id="panel-coverage" class="panel"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+function headers() {
+  const h = {'Content-Type': 'application/json'};
+  const tok = $('apiToken').value.trim();
+  if (tok) h['Authorization'] = 'Bearer ' + tok;
+  return h;
+}
+
+function api(path, opts) {
+  const base = $('apiUrl').value.replace(/\/$/, '');
+  return fetch(base + path, Object.assign({headers: headers()}, opts || {}))
+    .then(function(r) { if (!r.ok) throw new Error(r.status + ' ' + r.statusText); return r.json(); });
+}
+
+function safe(s) {
+  var d = document.createElement('div');
+  d.textContent = s || '';
+  return d.textContent;
+}
+
+function el(tag, attrs, children) {
+  var e = document.createElement(tag);
+  if (attrs) Object.keys(attrs).forEach(function(k) {
+    if (k === 'className') e.className = attrs[k];
+    else if (k === 'onclick') e.onclick = attrs[k];
+    else if (k === 'style') e.style.cssText = attrs[k];
+    else e.setAttribute(k, attrs[k]);
+  });
+  if (typeof children === 'string') e.textContent = children;
+  else if (Array.isArray(children)) children.forEach(function(c) { if (c) e.appendChild(c); });
+  return e;
+}
+
+// ── Tabs ──
+var tabNames = ['compare', 'browse', 'coverage'];
+var tabLabels = ['A/B Compare', 'Browse Memories', 'Enrichment Coverage'];
+
+function initTabs() {
+  var bar = $('tabBar');
+  bar.textContent = '';
+  tabNames.forEach(function(name, i) {
+    var t = el('div', {className: 'tab' + (i === 0 ? ' active' : ''), onclick: function() { switchTab(name); }}, tabLabels[i]);
+    bar.appendChild(t);
+  });
+}
+
+function switchTab(name) {
+  var tabs = $('tabBar').children;
+  tabNames.forEach(function(n, i) {
+    tabs[i].className = 'tab' + (n === name ? ' active' : '');
+    $('panel-' + n).className = 'panel' + (n === name ? ' active' : '');
+  });
+}
+
+initTabs();
+
+// ── Stats ──
+function loadStats() {
+  api('/health').then(function(health) {
+    return api('/analyze').then(function(analyze) {
+      var stats = analyze.statistics || {};
+      var bar = $('statsBar');
+      bar.textContent = '';
+      [
+        [stats.total_memories || 0, 'Total Memories'],
+        [health.qdrant_status === 'connected' ? '\u2713' : '\u2717', 'Qdrant'],
+        [health.graph_status === 'connected' ? '\u2713' : '\u2717', 'FalkorDB']
+      ].forEach(function(s) {
+        var stat = el('div', {className: 'stat'}, [
+          el('div', {className: 'stat-value'}, String(s[0])),
+          el('div', {className: 'stat-label'}, s[1])
+        ]);
+        bar.appendChild(stat);
+      });
+      loadCoverage();
+    });
+  }).catch(function(e) {
+    $('statsBar').textContent = '';
+    $('statsBar').appendChild(el('div', {className: 'error'}, 'Connection failed: ' + e.message));
+  });
+}
+
+// ── Compare ──
+function initCompare() {
+  var panel = $('panel-compare');
+  panel.textContent = '';
+  var controls = el('div', {className: 'controls'});
+  var input = el('input', {type: 'text', id: 'queryInput', placeholder: 'Search query...'});
+  input.onkeydown = function(e) { if (e.key === 'Enter') runCompare(); };
+  controls.appendChild(input);
+  controls.appendChild(el('button', {onclick: runCompare}, 'Compare'));
+  panel.appendChild(controls);
+  panel.appendChild(el('div', {id: 'compareResults'}));
+}
+initCompare();
+
+function runCompare() {
+  var query = $('queryInput').value.trim();
+  if (!query) return;
+  var container = $('compareResults');
+  container.textContent = '';
+  container.appendChild(el('div', {className: 'loading'}, 'Running recall...'));
+
+  api('/recall?query=' + encodeURIComponent(query) + '&n=10').then(function(data) {
+    container.textContent = '';
+    var grid = el('div', {className: 'compare-grid'});
+
+    var leftCol = el('div', {className: 'compare-col'});
+    leftCol.appendChild(el('div', {className: 'compare-title'}, 'Recall Results (top 10)'));
+
+    (data.memories || []).forEach(function(m, i) {
+      var card = el('div', {
+        className: 'result-card ' + (m.reasoning ? 'has-reasoning' : 'no-reasoning'),
+        onclick: function() { showDetail(m); }
+      });
+      var header = el('div', {style: 'display:flex;justify-content:space-between'});
+      header.appendChild(el('span', {style: 'font-weight:700;color:var(--accent)'}, '#' + (i + 1)));
+      header.appendChild(el('span', {style: 'color:var(--green)'}, (m.final_score || m.score || 0).toFixed(3)));
+      card.appendChild(header);
+      card.appendChild(el('div', {style: 'color:var(--dim);margin-top:4px'}, safe((m.content || '').substring(0, 200))));
+      var badge = el('div', {style: 'margin-top:4px;font-size:10px;color:' + (m.reasoning ? 'var(--purple)' : 'var(--dim)')},
+        m.reasoning ? '\u2726 Has reasoning' : '\u25CB No reasoning');
+      card.appendChild(badge);
+      leftCol.appendChild(card);
+    });
+
+    var rightCol = el('div', {className: 'compare-col', id: 'detailPanel'});
+    rightCol.appendChild(el('div', {className: 'compare-title'}, 'Memory Detail'));
+    rightCol.appendChild(el('p', {className: 'loading'}, 'Click a memory to see detail.'));
+
+    grid.appendChild(leftCol);
+    grid.appendChild(rightCol);
+    container.appendChild(grid);
+  }).catch(function(e) {
+    container.textContent = '';
+    container.appendChild(el('div', {className: 'error'}, e.message));
+  });
+}
+
+function showDetail(m) {
+  var panel = $('detailPanel');
+  panel.textContent = '';
+  panel.appendChild(el('div', {className: 'compare-title'}, 'Memory Detail'));
+
+  var detail = el('div', {className: 'memory-detail'});
+  detail.appendChild(el('h3', null, (m.id || '').substring(0, 8) + '...'));
+
+  detail.appendChild(el('div', {className: 'field-label'}, 'Content'));
+  var cv = el('div', {className: 'field-value content-field'}, safe(m.content || ''));
+  detail.appendChild(cv);
+
+  detail.appendChild(el('div', {className: 'field-label'}, 'Reasoning' + (m.reasoning ? ' (' + m.reasoning.length + ' chars)' : ' (none)')));
+  var rv = el('div', {className: 'field-value reasoning'}, m.reasoning ? safe(m.reasoning) : 'No reasoning generated yet');
+  if (!m.reasoning) rv.style.color = 'var(--dim)';
+  detail.appendChild(rv);
+
+  detail.appendChild(el('div', {className: 'field-label'}, 'Tags'));
+  var tagContainer = el('div');
+  (m.tags || []).forEach(function(t) { tagContainer.appendChild(el('span', {className: 'tag'}, safe(t))); });
+  detail.appendChild(tagContainer);
+
+  detail.appendChild(el('div', {className: 'field-label'}, 'Scores'));
+  detail.appendChild(el('div', {style: 'font-size:11px;color:var(--dim)'},
+    'Final: ' + (m.final_score || m.score || 0).toFixed(4) +
+    ' | Vector: ' + (m.vector_score || 0).toFixed(4) +
+    ' | Importance: ' + (m.importance || 0).toFixed(2) +
+    ' | Type: ' + (m.type || 'Memory')));
+
+  panel.appendChild(detail);
+}
+
+// ── Coverage ──
+function loadCoverage() {
+  var panel = $('panel-coverage');
+  panel.textContent = '';
+
+  api('/analyze').then(function(analyze) {
+    var stats = analyze.statistics || {};
+    var total = stats.total_memories || 0;
+
+    var detail = el('div', {className: 'memory-detail', style: 'max-width:600px'});
+    detail.appendChild(el('h3', null, 'Enrichment Coverage'));
+    detail.appendChild(el('p', {style: 'font-size:11px;color:var(--dim);margin-bottom:12px'},
+      'Tracks reasoning enrichment progress. Higher coverage = better recall quality.'));
+
+    var rows = [
+      ['Total Memories', total, total, 'var(--accent)'],
+      ['Enriched', stats.enriched_count || 0, total, 'var(--green)'],
+      ['With Reasoning', 'TBD', 0, 'var(--purple)']
+    ];
+
+    rows.forEach(function(r) {
+      var row = el('div', {className: 'coverage-row'});
+      row.appendChild(el('div', {className: 'coverage-label'}, r[0]));
+      var barOuter = el('div', {style: 'flex:1'});
+      var bar = el('div', {className: 'coverage-bar'});
+      var pct = r[2] > 0 ? (r[1] / r[2] * 100) : 0;
+      if (typeof r[1] === 'string') pct = 0;
+      var fill = el('div', {className: 'coverage-fill', style: 'width:' + pct + '%;background:' + r[3]});
+      bar.appendChild(fill);
+      barOuter.appendChild(bar);
+      row.appendChild(barOuter);
+      var pctLabel = el('div', {className: 'coverage-pct'});
+      pctLabel.textContent = typeof r[1] === 'string' ? r[1] : String(r[1]);
+      if (r[3] === 'var(--purple)') pctLabel.style.color = 'var(--purple)';
+      row.appendChild(pctLabel);
+      detail.appendChild(row);
+    });
+
+    detail.appendChild(el('p', {style: 'font-size:10px;color:var(--dim);margin-top:12px'},
+      'Note: Run enrichment pipeline with reasoning enabled, or use scripts/reenrich_batch.py --force'));
+
+    panel.appendChild(detail);
+
+    var levels = el('div', {className: 'memory-detail', style: 'max-width:600px'});
+    levels.appendChild(el('h3', null, 'Vector Quality Levels'));
+    var levelList = el('div', {style: 'font-size:12px;line-height:1.8'});
+    levelList.appendChild(el('div', {style: 'color:var(--dim)'}, 'Level 0: content only embed (current default)'));
+    levelList.appendChild(el('div', {style: 'color:var(--green)'}, 'Level 1: content + reasoning embed (this enrichment)'));
+    levelList.appendChild(el('div', {style: 'color:var(--purple)'}, 'Level 2: generated situations + reasoning (offline prep)'));
+    levels.appendChild(levelList);
+    panel.appendChild(levels);
+  }).catch(function(e) {
+    panel.textContent = '';
+    panel.appendChild(el('div', {className: 'error'}, e.message));
+  });
+}
+</script>
+</body>
+</html>
