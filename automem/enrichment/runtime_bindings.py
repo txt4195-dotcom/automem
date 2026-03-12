@@ -121,6 +121,99 @@ def create_enrichment_runtime(
             return _save_node_scores(graph, results[0])
         return False
 
+    def _generate_reasoning(content: str):
+        from automem.utils.reasoning_generator import generate_reasoning
+        return generate_reasoning(content)
+
+    def _re_embed(memory_id: str, rich_text: str):
+        """Re-embed a memory with enriched text (content + words).
+
+        Uses update_vectors to replace only the vector, preserving existing payload.
+        """
+        from automem.embedding import get_provider
+        provider = get_provider()
+        embedding = provider.embed(rich_text)
+        qdrant = get_qdrant_client_fn()
+        if qdrant is None:
+            return
+        from qdrant_client.models import PointVectors
+        qdrant.update_vectors(
+            collection_name=collection_name,
+            points=[PointVectors(id=memory_id, vector=embedding)],
+        )
+
+    def _generate_scenarios(content, enrichment_json):
+        from automem.utils.scenario_generator import generate_scenarios
+        return generate_scenarios(content, enrichment_json)
+
+    def _store_scenario(parent_id, scenario, parent_tags):
+        """Store a scenario as a separate Memory node linked to parent."""
+        import uuid
+        from automem.utils.scenario_generator import build_scenario_content
+
+        graph = get_memory_graph_fn()
+        if graph is None:
+            return None
+
+        scenario_id = str(uuid.uuid4())
+        scenario_content = build_scenario_content(scenario)
+        scenario_tags = list(parent_tags) + ["kind:scenario"]
+
+        # Store in FalkorDB
+        graph.query(
+            """
+            CREATE (m:Memory {
+                id: $id,
+                content: $content,
+                type: 'Scenario',
+                tags: $tags,
+                importance: 0.5,
+                timestamp: $ts,
+                processed: true,
+                enriched: true
+            })
+            """,
+            {
+                "id": scenario_id,
+                "content": scenario_content,
+                "tags": scenario_tags,
+                "ts": utc_now_fn(),
+            },
+        )
+
+        # Link to parent
+        graph.query(
+            """
+            MATCH (child:Memory {id: $child_id}), (parent:Memory {id: $parent_id})
+            MERGE (child)-[:DERIVED_FROM]->(parent)
+            """,
+            {"child_id": scenario_id, "parent_id": parent_id},
+        )
+
+        # Store in Qdrant
+        try:
+            from automem.embedding import get_provider
+            provider = get_provider()
+            embedding = provider.embed(scenario_content)
+            qdrant = get_qdrant_client_fn()
+            if qdrant is not None:
+                from qdrant_client.models import PointStruct
+                qdrant.upsert(
+                    collection_name=collection_name,
+                    points=[PointStruct(
+                        id=scenario_id,
+                        vector=embedding,
+                        payload={
+                            "tags": scenario_tags,
+                            "metadata": {"derived_from": parent_id, "scenario": scenario},
+                        },
+                    )],
+                )
+        except Exception:
+            logger.debug("Qdrant upsert for scenario %s failed (non-fatal)", scenario_id[:8])
+
+        return scenario_id
+
     def enrich_memory(memory_id: str, *, forced: bool = False) -> bool:
         return _enrich_memory_runtime(
             memory_id=memory_id,
@@ -142,6 +235,10 @@ def create_enrichment_runtime(
             collection_name=collection_name,
             unexpected_response_exc=unexpected_response_exc,
             logger=logger,
+            generate_reasoning_fn=_generate_reasoning,
+            re_embed_fn=_re_embed,
+            generate_scenarios_fn=_generate_scenarios,
+            store_scenario_fn=_store_scenario,
         )
 
     return EnrichmentRuntimeBindings(

@@ -156,13 +156,17 @@ def enrich_memory(
     find_temporal_relationships_fn: Callable[[Any, str], int],
     detect_patterns_fn: Callable[[Any, str, str], List[Dict[str, Any]]],
     link_semantic_neighbors_fn: Callable[[Any, str], List[Tuple[str, float]]],
-    score_node_fn: Optional[Callable[[Any, str, str], bool]],
+    score_node_fn: Optional[Callable[[Any, str, str], bool]],  # deprecated: replaced by lor_doctype
     enrichment_enable_summaries: bool,
     generate_summary_fn: Callable[[str, Any], Any],
     utc_now_fn: Callable[[], str],
     collection_name: str,
     unexpected_response_exc: Any,
     logger: Any,
+    generate_reasoning_fn: Optional[Callable[[str], Any]] = None,
+    re_embed_fn: Optional[Callable[[str, str], None]] = None,
+    generate_scenarios_fn: Optional[Callable[[str, Dict[str, Any]], Any]] = None,
+    store_scenario_fn: Optional[Callable[[str, Dict[str, Any], List[str]], Optional[str]]] = None,
 ) -> bool:
     """Enrich a memory with relationships, patterns, and entity extraction."""
     graph = get_memory_graph_fn()
@@ -233,14 +237,11 @@ def enrich_memory(
     pattern_info: List[Dict[str, Any]] = []
     semantic_neighbors = link_semantic_neighbors_fn(graph, memory_id)
 
-    # v3: Score node across 7 type-weight dimensions using LLM (nano)
-    if score_node_fn:
-        try:
-            score_node_fn(graph, memory_id, content)
-        except Exception:
-            logger.exception("Node scoring failed for %s (non-fatal)", memory_id)
+    # v3 node scoring (w_*) removed — replaced by lor_doctype in v4 stance scoring.
+    # lor_doctype covers the same dimensions (decision, pattern, insight, etc.)
+    # with higher accuracy via nano LLM stance analysis.
 
-    # v4: Stance scoring — 48 concept dimensions via nano
+    # v4: Stance scoring — concept dimensions via nano (includes doctype)
     from automem.utils.jit_resonance import needs_scoring as _needs_lor
     if _needs_lor(properties) or forced:
         try:
@@ -248,12 +249,36 @@ def enrich_memory(
             lor_values = score_stance(content)
             if lor_values is not None:
                 save_lor_to_graph(graph, memory_id, lor_values)
-                logger.debug("Stance scored for %s (%d categories)", memory_id,
-                             sum(1 for v in lor_values.values() if any(x != 0.0 for x in v)))
+                logger.debug("Stance scored for %s (%d concepts)", memory_id,
+                             sum(1 for k, v in lor_values.items() if not k.startswith("_")))
             else:
                 logger.debug("Stance scoring returned None for %s (will retry)", memory_id)
         except Exception:
             logger.exception("Stance scoring failed for %s (non-fatal, will retry)", memory_id)
+
+    # v7: Structured enrichment — 6Q battery, words for embedding, JSON for metadata
+    reasoning = properties.get("reasoning")  # words text (backward compat field name)
+    enrichment_json = None
+    if generate_reasoning_fn is not None and (not reasoning or forced):
+        try:
+            result = generate_reasoning_fn(content)
+            if result is not None:
+                if isinstance(result, tuple) and len(result) == 2:
+                    # v7: (enrichment_json_dict, words_text)
+                    enrichment_json, reasoning = result
+                else:
+                    # v6 backward compat: plain string
+                    reasoning = result
+                if reasoning:
+                    enrichment_json_str = json.dumps(enrichment_json, ensure_ascii=False) if enrichment_json else ""
+                    graph.query(
+                        "MATCH (m:Memory {id: $id}) SET m.reasoning = $reasoning, m.enrichment_json = $ej",
+                        {"id": memory_id, "reasoning": reasoning, "ej": enrichment_json_str},
+                    )
+                    logger.debug("Enrichment generated for %s (words=%d chars, json=%s)",
+                                 memory_id, len(reasoning), bool(enrichment_json))
+        except Exception:
+            logger.exception("Enrichment generation failed for %s (non-fatal)", memory_id)
 
     if enrichment_enable_summaries:
         existing_summary = properties.get("summary")
@@ -275,6 +300,8 @@ def enrich_memory(
             ],
         }
     )
+    if enrichment_json:
+        enrichment_meta["reasoning_json"] = enrichment_json
     metadata["enrichment"] = enrichment_meta
 
     update_payload = {
@@ -322,12 +349,36 @@ def enrich_memory(
         except Exception:
             logger.exception("Failed to sync Qdrant payload for enriched memory %s", memory_id)
 
+    # v7: Re-embed with content + words for rich vector
+    if re_embed_fn is not None and reasoning:
+        try:
+            from automem.utils.reasoning_generator import build_rich_embed_text
+            rich_text = build_rich_embed_text(content, reasoning)
+            re_embed_fn(memory_id, rich_text)
+            logger.debug("Re-embedded %s with words (%d chars total)", memory_id, len(rich_text))
+        except Exception:
+            logger.exception("Re-embed failed for %s (non-fatal)", memory_id)
+
+    # v7: Scenario generation — derived content as separate Memory nodes
+    if (generate_scenarios_fn is not None
+            and store_scenario_fn is not None
+            and enrichment_json is not None):
+        try:
+            scenarios = generate_scenarios_fn(content, enrichment_json)
+            if scenarios:
+                for scenario in scenarios:
+                    store_scenario_fn(memory_id, scenario, tags)
+                logger.debug("Generated %d scenarios for %s", len(scenarios), memory_id)
+        except Exception:
+            logger.exception("Scenario generation failed for %s (non-fatal)", memory_id)
+
     logger.debug(
-        "Enriched memory %s (temporal=%s, patterns=%s, semantic=%s)",
+        "Enriched memory %s (temporal=%s, patterns=%s, semantic=%s, reasoning=%s)",
         memory_id,
         temporal_links,
         pattern_info,
         len(semantic_neighbors),
+        bool(reasoning),
     )
 
     return True
