@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 
@@ -1162,14 +1163,23 @@ def handle_recall(
     # User profile for personalized scoring
     user_id_param = (request.args.get("user_id") or request.args.get("user") or "").strip() or None
     user_lens = None
+    user_lens_source = None  # actual user whose lens was resolved
     if graph is not None:
         from automem.utils.user_profile import get_user_lens
 
-        user_lens = get_user_lens(graph, user_id_param)
+        user_lens, user_lens_source = get_user_lens(graph, user_id_param)
 
-    # Wrap compute_metadata_score to inject user_lens into every call
+    # Doctype intent: dynamic query-time document type preference
+    doctype_intent: Optional[Dict[str, float]] = None
+    doctype_intent_raw = (request.args.get("doctype_intent") or "").strip()
+    if doctype_intent_raw:
+        from automem.utils.doctype_scoring import parse_doctype_intent
+
+        doctype_intent = parse_doctype_intent(doctype_intent_raw) or None
+
+    # Wrap compute_metadata_score to inject user_lens and doctype_intent into every call
     _original_compute_metadata_score = compute_metadata_score
-    if user_lens is not None:
+    if user_lens is not None or doctype_intent is not None:
         def compute_metadata_score(
             result: Dict[str, Any],
             query: str,
@@ -1177,7 +1187,9 @@ def handle_recall(
             context_profile: Optional[Dict[str, Any]] = None,
         ) -> tuple:
             return _original_compute_metadata_score(
-                result, query, tokens, context_profile, user_lens=user_lens
+                result, query, tokens, context_profile,
+                user_lens=user_lens,
+                doctype_intent=doctype_intent,
             )
 
 
@@ -1550,6 +1562,7 @@ def handle_recall(
 
     response = {
         "status": "success",
+        "query_id": str(uuid.uuid4()),
         "query": query_text,
         "results": results,
         "count": len(results),
@@ -1597,6 +1610,30 @@ def handle_recall(
             "filtered_count": pre_filter_count - len(results),
         }
     response["query_time_ms"] = round((time.perf_counter() - query_start) * 1000, 2)
+    if user_id_param or user_lens is not None:
+        profile_info: Dict[str, Any] = {
+            "requested_user": user_id_param,
+            "resolved_user": user_lens_source,
+            "fallback": user_lens_source != user_id_param if user_id_param else False,
+            "active": user_lens is not None,
+        }
+        if user_lens is not None:
+            # Summarize non-neutral axes: count dimensions with evidence
+            from automem.utils.user_profile import _parse_ab, _MIN_EVIDENCE
+            active_dims = 0
+            total_dims = 0
+            for concept, val in user_lens.items():
+                total_dims += 1
+                ab = _parse_ab(val)
+                if ab and ab[0] + ab[1] >= _MIN_EVIDENCE:
+                    active_dims += 1
+            profile_info["dimensions"] = {
+                "active": active_dims,
+                "total": total_dims,
+            }
+        response["profile"] = profile_info
+    if doctype_intent:
+        response["doctype_intent"] = doctype_intent
     if any_context_profile:
         response["context_priority"] = {
             "language": any_context_profile.get("language"),

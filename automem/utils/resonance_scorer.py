@@ -1,8 +1,8 @@
-"""Stance scoring: 48 concept dimensions via nano LLM.
+"""Stance scoring: 56 concept dimensions via nano LLM.
 
-Each memory gets scored on 48 bipolar concept dimensions across 6 categories
-(culture, polity, economy, epistemic, moral, religion). Nano analyzes the
-text per category, producing evidence-grounded stance judgments.
+Each memory gets scored on 56 bipolar concept dimensions across 7 categories
+(culture, polity, economy, epistemic, moral, religion, doctype). Nano analyzes
+the text per category, producing evidence-grounded stance judgments.
 
 ## Nano output format
 
@@ -28,11 +28,12 @@ text per category, producing evidence-grounded stance judgments.
     signed_s = s if plus, -s if minus
     lor = logit((s + 1) / 2)   # maps -1..+1 → -inf..+inf
 
-## Storage
+## Storage (v5: named properties)
 
-    FalkorDB Memory node properties: lor_culture, lor_polity, etc.
-    Each is a float array matching LENS_CATEGORIES[cat] order.
+    FalkorDB Memory node: one float property per concept.
+    e.g. lor_culture_individualism_collectivism = 1.2
     0.0 = neutral / not scored.
+    Property absent = unscored.
 
 ## Pipeline integration
 
@@ -42,9 +43,8 @@ text per category, producing evidence-grounded stance judgments.
 
 ## User alignment (user_profile.py)
 
-    User lens is [[a,b], ...] Beta pairs per concept.
-    p_agree = p_user * p_node + (1-p_user) * (1-p_node)
-    align_lor = logit(p_agree)
+    User lens: lens_<cat>_<concept> = [a, b] Beta pair.
+    Scoring in Cypher: alignment = (a - b) * lor. No exp/sigmoid needed.
 """
 
 from __future__ import annotations
@@ -59,11 +59,12 @@ import numpy as np
 
 from automem.utils.lens_concepts import (
     ALL_CONCEPTS,
+    ALL_LOR_PROPERTIES,
     CATEGORY_KEYS,
     CONCEPT_LOCATION,
     CONCEPT_POLES,
     LENS_CATEGORIES,
-    lor_property_name,
+    lor_concept_property,
 )
 
 logger = logging.getLogger(__name__)
@@ -180,6 +181,7 @@ CATEGORY_CONTEXT: Dict[str, str] = {
     "epistemic": "Ways of knowing: reason, evidence, certainty, technology",
     "moral": "Moral foundations: what matters ethically (Haidt framework)",
     "religion": "Religious and spiritual orientation",
+    "doctype": "Document character: what kind of knowledge this text represents (decision, pattern, insight, preference, style, habit, context, or factual record)",
 }
 
 
@@ -260,14 +262,14 @@ def _call_nano_batch(
 
 def score_stance(
     content: str, debug: bool = False,
-) -> Optional[Dict[str, List[float]]]:
-    """Score a memory's stance across all 48 concepts using nano.
+) -> Optional[Dict[str, float]]:
+    """Score a memory's stance across all 56 concepts using nano.
 
-    Sends one call per category (6 calls) so nano focuses on one
-    topic domain at a time. Merges results before converting to lor arrays.
+    Sends one call per category (7 calls) so nano focuses on one
+    topic domain at a time. Merges results before converting to lor values.
 
-    Returns {"culture": [lor, lor, ...], "polity": [...], ...} or None on failure.
-    When debug=True, result["_debug"] contains {concept: {p, conf, reason, lor, direction}}.
+    Returns {concept_name: lor_float, ...} (sparse, only scored concepts) or None.
+    When debug=True, result["_debug"] contains {concept: {s, conf, evidence, lor, direction}}.
     """
     client = _get_openai_client()
     if client is None:
@@ -384,28 +386,24 @@ def s_to_lor(s: float) -> float:
 
 def _validate_and_convert(
     data: Any, debug: bool = False,
-) -> Optional[Dict[str, List[float]]]:
-    """Validate sparse {concept: {e, s, c}} and convert to category lor arrays.
+) -> Optional[Dict[str, float]]:
+    """Validate sparse {concept: {e, s, c}} and convert to concept lor dict.
 
-    Omitted concepts stay 0.0 (neutral). Only concepts with explicit
-    stance values get converted to lor.
-    When debug=True, result["_debug"] contains per-concept details.
+    Returns {concept_name: lor_float, ...} — only scored concepts included.
+    Always includes "_evidence" with per-concept details (for Qdrant storage).
+    When debug=True, result["_debug"] also included (superset with direction labels).
     """
     if not isinstance(data, dict):
         return None
 
-    # Initialize all categories with 0.0
-    result: Dict[str, List[float]] = {}
-    for cat in CATEGORY_KEYS:
-        result[cat] = [0.0] * len(LENS_CATEGORIES[cat])
-
+    result: Dict[str, float] = {}
+    evidence_info: Dict[str, dict] = {}
     debug_info: Dict[str, dict] = {}
 
     for concept_name, val in data.items():
         if concept_name not in CONCEPT_LOCATION:
             continue
 
-        cat, idx = CONCEPT_LOCATION[concept_name]
         extracted = _extract_stance(val, concept_name)
         if extracted is None:
             continue
@@ -413,7 +411,18 @@ def _validate_and_convert(
         s, conf, evidence, pole_chosen = extracted
         s = max(-1.0, min(1.0, s))
         lor = round(s_to_lor(s), 4)
-        result[cat][idx] = lor
+        if lor == 0.0:
+            continue  # neutral = no signal, skip
+        result[concept_name] = lor
+
+        # Always capture evidence (for Qdrant payload)
+        evidence_info[concept_name] = {
+            "e": evidence,
+            "d": pole_chosen,
+            "s": round(s, 4),
+            "c": round(conf, 4) if conf is not None else None,
+            "lor": lor,
+        }
 
         if debug:
             plus_label, minus_label = CONCEPT_POLES[concept_name]
@@ -426,6 +435,8 @@ def _validate_and_convert(
                 "direction": f"(+) {plus_label}" if s >= 0 else f"(-) {minus_label}",
             }
 
+    if evidence_info:
+        result["_evidence"] = evidence_info  # type: ignore[assignment]
     if debug:
         result["_debug"] = debug_info  # type: ignore[assignment]
     return result
@@ -436,18 +447,23 @@ def _validate_and_convert(
 def save_lor_to_graph(
     graph: Any,
     memory_id: str,
-    lor_values: Dict[str, List[float]],
+    lor_values: Dict[str, float],
 ) -> bool:
-    """Write lor arrays to Memory node in FalkorDB."""
+    """Write named lor properties to Memory node in FalkorDB.
+
+    lor_values: {concept_name: lor_float, ...} (sparse).
+    Each becomes e.g. m.lor_culture_individualism_collectivism = 1.2
+    """
     set_clauses = []
     params: Dict[str, Any] = {"mid": memory_id}
 
-    for cat in CATEGORY_KEYS:
-        if cat in lor_values:
-            prop = lor_property_name(cat)
-            param = "l_" + cat
-            set_clauses.append("m.{} = ${}".format(prop, param))
-            params[param] = lor_values[cat]
+    for concept_name, lor in lor_values.items():
+        if concept_name.startswith("_"):
+            continue  # skip _debug etc.
+        prop = lor_concept_property(concept_name)
+        param = "l_" + concept_name
+        set_clauses.append(f"m.{prop} = ${param}")
+        params[param] = lor
 
     if not set_clauses:
         return False
@@ -471,8 +487,8 @@ def score_and_save(
     graph: Any,
     memory_id: str,
     content: str,
-) -> Optional[Dict[str, List[float]]]:
-    """Score stance and save to graph. Returns lor dict or None."""
+) -> Optional[Dict[str, float]]:
+    """Score stance and save to graph. Returns {concept: lor} or None."""
     lors = score_stance(content)
     if lors is None:
         return None

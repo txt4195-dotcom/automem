@@ -200,7 +200,20 @@ def enrich_memory(
                     from automem.utils.resonance_scorer import score_stance, save_lor_to_graph
                     lor_values = score_stance(content)
                     if lor_values is not None:
+                        backfill_evidence = lor_values.pop("_evidence", None)
                         save_lor_to_graph(graph, memory_id, lor_values)
+                        # Store evidence in Qdrant
+                        if backfill_evidence:
+                            qdrant_client = get_qdrant_client_fn()
+                            if qdrant_client is not None:
+                                try:
+                                    qdrant_client.set_payload(
+                                        collection_name=collection_name,
+                                        points=[memory_id],
+                                        payload={"stance_evidence": backfill_evidence},
+                                    )
+                                except Exception:
+                                    logger.debug("Backfill evidence Qdrant sync failed for %s", memory_id)
                         logger.debug("Backfill stance scored for %s", memory_id)
                 except Exception:
                     logger.debug("Backfill stance scoring failed for %s", memory_id)
@@ -242,12 +255,15 @@ def enrich_memory(
     # with higher accuracy via nano LLM stance analysis.
 
     # v4: Stance scoring — concept dimensions via nano (includes doctype)
+    # v7b: evidence captured for Qdrant payload
+    stance_evidence = None
     from automem.utils.jit_resonance import needs_scoring as _needs_lor
     if _needs_lor(properties) or forced:
         try:
             from automem.utils.resonance_scorer import score_stance, save_lor_to_graph
             lor_values = score_stance(content)
             if lor_values is not None:
+                stance_evidence = lor_values.pop("_evidence", None)
                 save_lor_to_graph(graph, memory_id, lor_values)
                 logger.debug("Stance scored for %s (%d concepts)", memory_id,
                              sum(1 for k, v in lor_values.items() if not k.startswith("_")))
@@ -256,7 +272,7 @@ def enrich_memory(
         except Exception:
             logger.exception("Stance scoring failed for %s (non-fatal, will retry)", memory_id)
 
-    # v7: Structured enrichment — 6Q battery, words for embedding, JSON for metadata
+    # v7b: Structured enrichment — 6Q battery, full text + words for Qdrant, words only for FalkorDB
     reasoning = properties.get("reasoning")  # words text (backward compat field name)
     enrichment_json = None
     if generate_reasoning_fn is not None and (not reasoning or forced):
@@ -270,10 +286,10 @@ def enrich_memory(
                     # v6 backward compat: plain string
                     reasoning = result
                 if reasoning:
-                    enrichment_json_str = json.dumps(enrichment_json, ensure_ascii=False) if enrichment_json else ""
+                    # FalkorDB: words text only (backward compat)
                     graph.query(
-                        "MATCH (m:Memory {id: $id}) SET m.reasoning = $reasoning, m.enrichment_json = $ej",
-                        {"id": memory_id, "reasoning": reasoning, "ej": enrichment_json_str},
+                        "MATCH (m:Memory {id: $id}) SET m.reasoning = $reasoning",
+                        {"id": memory_id, "reasoning": reasoning},
                     )
                     logger.debug("Enrichment generated for %s (words=%d chars, json=%s)",
                                  memory_id, len(reasoning), bool(enrichment_json))
@@ -300,8 +316,7 @@ def enrich_memory(
             ],
         }
     )
-    if enrichment_json:
-        enrichment_meta["reasoning_json"] = enrichment_json
+    # enrichment_json goes to Qdrant payload, not FalkorDB metadata
     metadata["enrichment"] = enrichment_meta
 
     update_payload = {
@@ -330,14 +345,19 @@ def enrich_memory(
     qdrant_client = get_qdrant_client_fn()
     if qdrant_client is not None:
         try:
+            qdrant_payload = {
+                "tags": tags,
+                "tag_prefixes": tag_prefixes,
+                "metadata": metadata,
+            }
+            if enrichment_json:
+                qdrant_payload["enrichment"] = enrichment_json
+            if stance_evidence:
+                qdrant_payload["stance_evidence"] = stance_evidence
             qdrant_client.set_payload(
                 collection_name=collection_name,
                 points=[memory_id],
-                payload={
-                    "tags": tags,
-                    "tag_prefixes": tag_prefixes,
-                    "metadata": metadata,
-                },
+                payload=qdrant_payload,
             )
         except unexpected_response_exc as exc:
             if exc.status_code == 404:
@@ -349,13 +369,17 @@ def enrich_memory(
         except Exception:
             logger.exception("Failed to sync Qdrant payload for enriched memory %s", memory_id)
 
-    # v7: Re-embed with content + words for rich vector
+    # v7b: Re-embed with content + full enrichment descriptions + words
     if re_embed_fn is not None and reasoning:
         try:
-            from automem.utils.reasoning_generator import build_rich_embed_text
-            rich_text = build_rich_embed_text(content, reasoning)
+            from automem.utils.reasoning_generator import (
+                _flatten_enrichment,
+                build_rich_embed_text,
+            )
+            enrichment_text = _flatten_enrichment(enrichment_json) if enrichment_json else None
+            rich_text = build_rich_embed_text(content, enrichment_text, reasoning)
             re_embed_fn(memory_id, rich_text)
-            logger.debug("Re-embedded %s with words (%d chars total)", memory_id, len(rich_text))
+            logger.debug("Re-embedded %s with full enrichment (%d chars total)", memory_id, len(rich_text))
         except Exception:
             logger.exception("Re-embed failed for %s (non-fatal)", memory_id)
 

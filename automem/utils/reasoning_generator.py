@@ -1,9 +1,9 @@
-"""Generate structured enrichment for memory content (v7).
+"""Generate structured enrichment for memory content (v7b).
 
 Uses gpt-5-nano (reasoning model) with a 6-question battery to produce
-structured JSON. The "words" fields from each answer get embedded alongside
-content in Qdrant vectors. The full JSON is stored in FalkorDB for
-downstream use (graph node expansion, scenario generation).
+structured JSON. The full enrichment text (descriptions + words) is embedded
+alongside content in Qdrant vectors. The structured JSON goes into Qdrant
+payload. FalkorDB stores only the words text (backward compat).
 
 Questions:
   1. Overstory — what larger narrative is this one chapter of
@@ -125,6 +125,36 @@ def _extract_all_words(data: Dict[str, Any]) -> str:
     return " ".join(words)
 
 
+def _flatten_enrichment(data: Dict[str, Any]) -> str:
+    """Flatten enrichment JSON into text for vector embedding.
+
+    Includes ALL text from every section (descriptions + words).
+    Maximizes the search surface in Qdrant vector space.
+    """
+    parts = []
+    for key in ENRICHMENT_KEYS:
+        val = data.get(key)
+        if isinstance(val, dict):
+            for v in val.values():
+                if isinstance(v, str) and v:
+                    parts.append(v)
+                elif isinstance(v, list):
+                    for item in v:
+                        if isinstance(item, dict):
+                            parts.extend(str(x) for x in item.values() if x)
+                        elif isinstance(item, str) and item:
+                            parts.append(item)
+        elif isinstance(val, list):
+            for item in val:
+                if isinstance(item, dict):
+                    parts.extend(str(v) for v in item.values() if v)
+                elif isinstance(item, str) and item:
+                    parts.append(item)
+        elif isinstance(val, str) and val:
+            parts.append(val)
+    return " ".join(parts)
+
+
 def _parse_llm_json(raw: str) -> Optional[Dict[str, Any]]:
     """Parse JSON from LLM response, stripping markdown fences if present."""
     raw = raw.strip()
@@ -145,8 +175,8 @@ def generate_reasoning(content: str) -> Optional[Tuple[Dict[str, Any], str]]:
     Uses gpt-5-nano (reasoning model) with 6-question battery.
     Returns (enrichment_json, words_text) tuple, or None on failure.
 
-    - enrichment_json: full structured analysis (for FalkorDB metadata)
-    - words_text: extracted keywords only (for Qdrant vector embedding)
+    - enrichment_json: full structured analysis (for Qdrant payload + vector via _flatten_enrichment)
+    - words_text: extracted keywords only (for FalkorDB reasoning field, backward compat)
     """
     if not content or len(content.strip()) < 20:
         return None
@@ -199,12 +229,22 @@ def generate_reasoning(content: str) -> Optional[Tuple[Dict[str, Any], str]]:
         return None
 
 
-def build_rich_embed_text(content: str, words: Optional[str] = None) -> str:
+def build_rich_embed_text(
+    content: str,
+    enrichment_text: Optional[str] = None,
+    words: Optional[str] = None,
+) -> str:
     """Build the text to embed in Qdrant.
 
-    content + words = rich vector.
-    If words are not yet generated, content alone is used (1st pass embed).
+    content + enrichment descriptions + words = rich vector.
+    All three layers maximize the search surface:
+    - content: original text
+    - enrichment_text: flattened analysis (overstory, inference, frame, etc.)
+    - words: extracted related terms and synonyms
     """
-    if not words:
-        return content
-    return f"{content}\n\n{words}"
+    parts = [content]
+    if enrichment_text:
+        parts.append(enrichment_text)
+    if words:
+        parts.append(words)
+    return "\n\n".join(parts)

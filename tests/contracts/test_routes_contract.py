@@ -30,6 +30,7 @@ EXPECTED_ROUTE_METHODS = {
     ("GET", "/viewer/<path:path>"),
     ("GET", "/stream"),
     ("GET", "/stream/status"),
+    ("POST", "/feedback"),
 }
 
 

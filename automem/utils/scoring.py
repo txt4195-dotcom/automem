@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from automem.config import (
     SEARCH_WEIGHT_CONFIDENCE,
+    SEARCH_WEIGHT_DOCTYPE,
     SEARCH_WEIGHT_EXACT,
     SEARCH_WEIGHT_IMPORTANCE,
     SEARCH_WEIGHT_KEYWORD,
@@ -125,6 +126,7 @@ def _compute_metadata_score(
     tokens: List[str],
     context_profile: Optional[Dict[str, Any]] = None,
     user_lens: Optional[Dict[str, Any]] = None,
+    doctype_intent: Optional[Dict[str, float]] = None,
 ) -> Tuple[float, Dict[str, float]]:
     memory = result.get("memory", {})
     metadata = _parse_metadata_field(memory.get("metadata")) if memory else {}
@@ -188,6 +190,13 @@ def _compute_metadata_score(
         if resonance:
             profile_score = compute_profile_score(user_lens, resonance)
 
+    # Doctype score: dynamic query-time intent matching (separate pipeline stage)
+    doctype_score = 0.0
+    if doctype_intent:
+        from automem.utils.doctype_scoring import compute_doctype_score_from_memory
+
+        doctype_score = compute_doctype_score_from_memory(doctype_intent, result)
+
     final = (
         SEARCH_WEIGHT_VECTOR * vector_component
         + SEARCH_WEIGHT_KEYWORD * keyword_component
@@ -199,6 +208,7 @@ def _compute_metadata_score(
         + SEARCH_WEIGHT_EXACT * exact_match
         + SEARCH_WEIGHT_RELEVANCE * relevance_score
         + SEARCH_WEIGHT_PROFILE * profile_score
+        + SEARCH_WEIGHT_DOCTYPE * doctype_score
         + context_bonus
     )
 
@@ -213,6 +223,7 @@ def _compute_metadata_score(
         "exact": exact_match,
         "relevance": relevance_score,
         "profile": profile_score,
+        "doctype": doctype_score,
         "context": context_bonus,
     }
 

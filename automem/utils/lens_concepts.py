@@ -1,33 +1,31 @@
 """Canonical concept dimensions for User lens and Memory stance.
 
-Storage: 6 category-based properties on each node.
+Storage: named properties per concept on each node.
 
-  User:   lens_culture, lens_polity, lens_economy, lens_epistemic, lens_moral, lens_religion
-          Each is [[a,b], ...] — Beta distribution pairs per concept.
+  User:   lens_<category>_<concept> = [a, b]  — Beta distribution pair.
+          e.g. lens_culture_individualism_collectivism = [2.0, 1.0]
           a = evidence for plus pole, b = evidence for minus pole.
           p_user = a / (a + b)  →  direction.
           a + b = total evidence  →  confidence.
           [1, 1] = uniform prior (no opinion, skipped in scoring).
           Property absent = unobserved (skipped in scoring).
 
-  Memory: lor_culture,  lor_polity,  lor_economy,  lor_epistemic,  lor_moral,  lor_religion
-          Each is [float, ...] — signed log-odds of content's stance.
+  Memory: lor_<category>_<concept> = float  — signed log-odds of content's stance.
+          e.g. lor_culture_individualism_collectivism = 1.2
           0.0 = neutral on that axis.
           >0 = leans toward plus pole, <0 = leans toward minus pole.
           Property absent = unscored (no evidence for that axis).
 
-Scoring: per dimension, compute p_agree (probability user and content agree).
-  p_user = a / (a + b)
-  p_node = sigmoid(content_lor)
-  p_agree = p_user * p_node + (1-p_user) * (1-p_node)
-  align_lor = logit(p_agree)
-  Sum across all dimensions → profile_score.
+Scoring in Cypher (log-space, no exp/sigmoid needed for ranking):
+  alignment = (a - b) * lor  — positive when user and content agree.
+  Sum across dimensions → profile_score.
 
-48 concepts across 6 categories, derived from:
+56 concepts across 7 categories, derived from:
 - Hofstede's cultural dimensions
 - World Values Survey (Inglehart)
 - Moral Foundations Theory (Haidt)
 - Pew Research religiosity/spirituality decomposition
+- Document type emphasis (unipolar, like moral foundations)
 """
 
 from __future__ import annotations
@@ -99,6 +97,16 @@ LENS_CATEGORIES: Dict[str, List[str]] = OrderedDict([
         "spirit_world_belief",
         "exclusivism_pluralism",
     ]),
+    ("doctype", [
+        "decision_emphasis",
+        "pattern_emphasis",
+        "preference_emphasis",
+        "style_emphasis",
+        "habit_emphasis",
+        "insight_emphasis",
+        "context_emphasis",
+        "factual_emphasis",
+    ]),
 ])
 
 # Bipolar labels: concept_key -> (plus_label, minus_label)
@@ -158,14 +166,23 @@ CONCEPT_POLES: Dict[str, Tuple[str, str]] = {
     "sacred_boundary": ("strong sacred boundary, holy vs profane", "weak sacred boundary, all is ordinary"),
     "spirit_world_belief": ("believes in spirit world", "no spirit world, naturalism"),
     "exclusivism_pluralism": ("religious exclusivism, one true faith", "religious pluralism, many paths"),
+    # doctype (document character — unipolar emphasis, like moral foundations)
+    "decision_emphasis": ("decision, strategic choice with rationale, why X over Y", "not a decision, no choice being made"),
+    "pattern_emphasis": ("pattern, recurring behavior or regularity across situations", "not a pattern, one-off occurrence"),
+    "preference_emphasis": ("preference, user preference or setting, likes/dislikes", "not a preference, no personal taste"),
+    "style_emphasis": ("style, coding or writing style, conventions and approach", "not about style, no stylistic content"),
+    "habit_emphasis": ("habit, regular practice or workflow, routine behavior", "not a habit, no routine described"),
+    "insight_emphasis": ("insight, discovery or learned understanding, a-ha moment", "not an insight, no new understanding"),
+    "context_emphasis": ("context, environmental or situational background info", "not context, not background information"),
+    "factual_emphasis": ("factual record, what happened, raw data, concrete event", "not factual, abstract or speculative"),
 }
 
-LENS_PREFIX = "lens_"      # User node: lens_culture, lens_polity, ...
-LOR_PREFIX = "lor_"        # Memory node: lor_culture, lor_polity, ...
+LENS_PREFIX = "lens_"      # User node: lens_culture_individualism_collectivism, ...
+LOR_PREFIX = "lor_"        # Memory node: lor_culture_individualism_collectivism, ...
 
 CATEGORY_KEYS: List[str] = list(LENS_CATEGORIES.keys())
 
-NUM_CONCEPTS = sum(len(v) for v in LENS_CATEGORIES.values())  # 48
+NUM_CONCEPTS = sum(len(v) for v in LENS_CATEGORIES.values())  # 56
 
 ALL_CONCEPTS: List[str] = []
 for _concepts in LENS_CATEGORIES.values():
@@ -199,34 +216,97 @@ PRIORITY_CONCEPTS: List[str] = [
     "afterlife_orientation",
 ]
 
-
-def make_default_lens() -> Dict[str, List[List[float]]]:
-    """All [1,1] = uniform prior. No effect on scoring (skipped)."""
-    return {
-        cat: [[1.0, 1.0]] * len(concepts)
-        for cat, concepts in LENS_CATEGORIES.items()
-    }
+# ---------------------------------------------------------------------------
+# Named property helpers (v5: one property per concept)
+# ---------------------------------------------------------------------------
 
 
-def make_default_lor() -> Dict[str, List[float]]:
-    """All 0.0 = neutral lor on content. No stance signal."""
-    return {
-        cat: [0.0] * len(concepts)
-        for cat, concepts in LENS_CATEGORIES.items()
-    }
+def lor_concept_property(concept: str) -> str:
+    """Named lor property for a single concept.
+
+    e.g. 'individualism_collectivism' -> 'lor_culture_individualism_collectivism'
+    """
+    cat, _idx = CONCEPT_LOCATION[concept]
+    return f"{LOR_PREFIX}{cat}_{concept}"
+
+
+def lens_concept_property(concept: str) -> str:
+    """Named lens property for a single concept.
+
+    e.g. 'individualism_collectivism' -> 'lens_culture_individualism_collectivism'
+    """
+    cat, _idx = CONCEPT_LOCATION[concept]
+    return f"{LENS_PREFIX}{cat}_{concept}"
+
+
+# Pre-built lookup: concept_name -> lor property name
+ALL_LOR_PROPERTIES: Dict[str, str] = {
+    concept: lor_concept_property(concept) for concept in ALL_CONCEPTS
+}
+
+# Pre-built lookup: concept_name -> lens property name
+ALL_LENS_PROPERTIES: Dict[str, str] = {
+    concept: lens_concept_property(concept) for concept in ALL_CONCEPTS
+}
+
+# Flat list of all lor property names (for schema discovery, needs_scoring, etc.)
+LOR_PROPERTY_NAMES: List[str] = list(ALL_LOR_PROPERTIES.values())
+LENS_PROPERTY_NAMES: List[str] = list(ALL_LENS_PROPERTIES.values())
+
+
+def lor_properties_for_category(category: str) -> List[Tuple[str, str]]:
+    """Return [(concept_name, property_name), ...] for a category.
+
+    e.g. lor_properties_for_category('culture') ->
+         [('individualism_collectivism', 'lor_culture_individualism_collectivism'), ...]
+    """
+    return [
+        (concept, ALL_LOR_PROPERTIES[concept])
+        for concept in LENS_CATEGORIES[category]
+    ]
+
+
+def lens_properties_for_category(category: str) -> List[Tuple[str, str]]:
+    """Return [(concept_name, property_name), ...] for a category."""
+    return [
+        (concept, ALL_LENS_PROPERTIES[concept])
+        for concept in LENS_CATEGORIES[category]
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Default values (named property format)
+# ---------------------------------------------------------------------------
+
+
+def make_default_lens() -> Dict[str, List[float]]:
+    """All [1,1] = uniform prior. No effect on scoring (skipped).
+
+    Returns {property_name: [1.0, 1.0], ...} for all 56 concepts.
+    """
+    return {prop: [1.0, 1.0] for prop in LENS_PROPERTY_NAMES}
+
+
+def make_default_lor() -> Dict[str, float]:
+    """All 0.0 = neutral lor. {lor_culture_individualism_collectivism: 0.0, ...}."""
+    return {prop: 0.0 for prop in LOR_PROPERTY_NAMES}
+
+
+# ---------------------------------------------------------------------------
+# Legacy helpers (category-level property names — for migration/compat)
+# ---------------------------------------------------------------------------
 
 
 def lens_property_name(category: str) -> str:
-    """e.g. 'culture' -> 'lens_culture'."""
+    """LEGACY: e.g. 'culture' -> 'lens_culture'. Use lens_concept_property() instead."""
     return f"{LENS_PREFIX}{category}"
 
 
 def lor_property_name(category: str) -> str:
-    """e.g. 'culture' -> 'lor_culture'."""
+    """LEGACY: e.g. 'culture' -> 'lor_culture'. Use lor_concept_property() instead."""
     return f"{LOR_PREFIX}{category}"
 
 
-# Backward compat alias
 def res_property_name(category: str) -> str:
     """Deprecated: use lor_property_name. Maps to lor_ prefix."""
     return lor_property_name(category)

@@ -15,16 +15,13 @@ from automem.utils.resonance_scorer import (
     s_to_lor,
 )
 from automem.utils.user_profile import (
-    _score_category,
-    _sigmoid,
     compute_profile_score,
     get_memory_resonance,
 )
 from automem.utils.lens_concepts import (
     CATEGORY_KEYS,
     LENS_CATEGORIES,
-    make_default_lens,
-    make_default_lor,
+    lor_concept_property,
 )
 
 
@@ -104,11 +101,11 @@ class TestExtractStance:
         assert abs(s - 1.0) < 0.01  # clamped to 1.0
 
 
-# ── _validate_and_convert (nano output → lor arrays) ─────────
+# ── _validate_and_convert (nano output → concept lor dict) ───
 
 class TestValidateAndConvert:
-    def test_sparse_to_dense(self):
-        """Sparse nano output fills correct positions, rest stays 0.0."""
+    def test_sparse_to_named(self):
+        """Sparse nano output returns {concept_name: lor_float} — only scored concepts."""
         data = {
             "individualism_collectivism": {
                 "e": "self-reliance emphasized",
@@ -119,12 +116,10 @@ class TestValidateAndConvert:
         }
         result = _validate_and_convert(data)
         assert result is not None
-        # individualism_collectivism is index 0 in culture
-        assert result["culture"][0] != 0.0
-        assert result["culture"][0] > 0  # plus pole
-        # all other culture dims should be 0
-        for i in range(1, len(result["culture"])):
-            assert result["culture"][i] == 0.0
+        assert "individualism_collectivism" in result
+        assert result["individualism_collectivism"] > 0  # plus pole
+        # Other concepts not scored → absent from result
+        assert "hierarchy_egalitarian" not in result
 
     def test_debug_mode(self):
         data = {
@@ -146,9 +141,9 @@ class TestValidateAndConvert:
         data = {"nonexistent_concept": {"e": "x", "d": "y", "s": 0.5, "c": 0.5}}
         result = _validate_and_convert(data)
         assert result is not None
-        # All categories should be all zeros
-        for cat in CATEGORY_KEYS:
-            assert all(v == 0.0 for v in result[cat])
+        # No real concepts scored → only _debug could be present, but no concept keys
+        concept_keys = [k for k in result if not k.startswith("_")]
+        assert len(concept_keys) == 0
 
     def test_empty_dict(self):
         result = _validate_and_convert({})
@@ -158,17 +153,18 @@ class TestValidateAndConvert:
 # ── compute_profile_score (alignment) ────────────────────────
 
 class TestProfileScore:
+    # compute_profile_score(lens, content_lor) expects both dicts keyed by
+    # concept_name (e.g. "individualism_collectivism"), not property names.
+    # lens: {concept_name: [a, b]}
+    # content_lor: {concept_name: lor_float}
+
     def _make_simple_lens(self, a, b):
-        """Create lens with one concept having Beta(a, b), rest uniform."""
-        lens = make_default_lens()
-        lens["culture"][0] = [a, b]  # individualism_collectivism
-        return lens
+        """Create lens with one concept having Beta(a, b)."""
+        return {"individualism_collectivism": [a, b]}
 
     def _make_simple_lor(self, lor_value):
-        """Create lor dict with one concept having lor_value, rest 0."""
-        lors = make_default_lor()
-        lors["culture"][0] = lor_value
-        return lors
+        """Create lor dict with individualism_collectivism = lor_value."""
+        return {"individualism_collectivism": lor_value}
 
     def test_aligned_positive(self):
         """User leans individualism, memory leans individualism → positive score."""
@@ -206,7 +202,7 @@ class TestProfileScore:
         assert score == 0.0
 
     def test_empty_lens(self):
-        assert compute_profile_score({}, make_default_lor()) == 0.0
+        assert compute_profile_score({}, {"individualism_collectivism": 2.0}) == 0.0
 
     def test_empty_lor(self):
         lens = self._make_simple_lens(8, 2)
@@ -221,20 +217,18 @@ class TestProfileScore:
 
     def test_multi_category(self):
         """Score sums across multiple categories."""
-        lens = make_default_lens()
-        lens["culture"][0] = [8, 2]  # individualism
-        lens["epistemic"][0] = [8, 2]  # empiricism
+        multi_lens = {
+            "individualism_collectivism": [8, 2],
+            "empiricism_revelation": [8, 2],
+        }
+        multi_lors = {
+            "individualism_collectivism": 2.0,
+            "empiricism_revelation": 2.0,
+        }
+        single_lens = {"individualism_collectivism": [8, 2]}
+        single_lors = {"individualism_collectivism": 2.0}
 
-        lors = make_default_lor()
-        lors["culture"][0] = 2.0   # individualism
-        lors["epistemic"][0] = 2.0  # empiricism
-
-        single_lens = make_default_lens()
-        single_lens["culture"][0] = [8, 2]
-        single_lors = make_default_lor()
-        single_lors["culture"][0] = 2.0
-
-        multi_score = compute_profile_score(lens, lors)
+        multi_score = compute_profile_score(multi_lens, multi_lors)
         single_score = compute_profile_score(single_lens, single_lors)
         # Multi should be roughly 2x single (both aligned)
         assert multi_score > single_score
@@ -244,19 +238,27 @@ class TestProfileScore:
 # ── get_memory_resonance (extraction from memory dict) ───────
 
 class TestGetMemoryResonance:
-    def test_extracts_lor_properties(self):
+    def test_extracts_named_lor_properties(self):
+        """v5: reads lor_culture_individualism_collectivism, etc."""
         memory = {
-            "lor_culture": [0.5, -0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-            "lor_polity": [0.0] * 10,
+            lor_concept_property("individualism_collectivism"): 0.5,
+            lor_concept_property("hierarchy_egalitarian"): -0.3,
         }
         resonance = get_memory_resonance(memory)
         assert resonance is not None
-        assert "culture" in resonance
-        assert resonance["culture"][0] == 0.5
-        assert resonance["culture"][1] == -0.3
+        assert "individualism_collectivism" in resonance
+        assert resonance["individualism_collectivism"] == 0.5
+        assert resonance["hierarchy_egalitarian"] == -0.3
 
     def test_returns_none_when_no_lor(self):
         memory = {"content": "hello", "tags": ["test"]}
+        assert get_memory_resonance(memory) is None
+
+    def test_skips_zero_values(self):
+        """lor=0.0 is neutral and should not appear in resonance."""
+        memory = {
+            lor_concept_property("individualism_collectivism"): 0.0,
+        }
         assert get_memory_resonance(memory) is None
 
 
@@ -281,29 +283,32 @@ class TestEndToEnd:
             },
         }
 
-        # 2. Convert nano output to lor arrays
+        # 2. Convert nano output to named concept lor dict
         lor_result = _validate_and_convert(nano_output)
         assert lor_result is not None
 
         # individualism → plus pole → positive lor
-        assert lor_result["culture"][0] > 0
+        assert lor_result["individualism_collectivism"] > 0
         # minimalism → minus pole → negative lor
-        assert lor_result["economy"][3] < 0  # consumerism_minimalism is idx 3
+        assert lor_result["consumerism_minimalism"] < 0
 
         # 3. Create user lens: also individualist, also minimalist
-        user_lens = make_default_lens()
-        user_lens["culture"][0] = [8, 2]   # p_user=0.8 → individualism
-        user_lens["economy"][3] = [2, 8]   # p_user=0.2 → minimalism (minus pole)
+        # compute_profile_score accepts concept_name keys (v5 named format)
+        user_lens = {
+            "individualism_collectivism": [8, 2],   # p_user=0.8 → individualism
+            "consumerism_minimalism": [2, 8],        # p_user=0.2 → minimalism (minus pole)
+        }
 
         # 4. Compute profile score
         score = compute_profile_score(user_lens, lor_result)
         # Both dimensions aligned → should be positive
         assert score > 0
 
-        # 5. Now test misalignment: user is collectivist
-        user_lens_opposite = make_default_lens()
-        user_lens_opposite["culture"][0] = [2, 8]  # collectivism
-        user_lens_opposite["economy"][3] = [8, 2]  # consumerism
+        # 5. Now test misalignment: user is collectivist/consumerist
+        user_lens_opposite = {
+            "individualism_collectivism": [2, 8],  # collectivism
+            "consumerism_minimalism": [8, 2],       # consumerism
+        }
 
         score_opposite = compute_profile_score(user_lens_opposite, lor_result)
         # Both dimensions misaligned → should be negative

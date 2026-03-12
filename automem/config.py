@@ -479,6 +479,13 @@ SEARCH_WEIGHT_EXACT = float(os.getenv("SEARCH_WEIGHT_EXACT", "0.2"))
 SEARCH_WEIGHT_RELATION = float(os.getenv("SEARCH_WEIGHT_RELATION", "0.25"))
 SEARCH_WEIGHT_RELEVANCE = float(os.getenv("SEARCH_WEIGHT_RELEVANCE", "0.0"))
 SEARCH_WEIGHT_PROFILE = float(os.getenv("SEARCH_WEIGHT_PROFILE", "0.15"))
+SEARCH_WEIGHT_DOCTYPE = float(os.getenv("SEARCH_WEIGHT_DOCTYPE", "0.10"))
+
+# Feedback loop: Beta lens update parameters
+FEEDBACK_ETA_BASE = float(os.getenv("FEEDBACK_ETA_BASE", "1.0"))
+FEEDBACK_TOP_K_LENSES = int(os.getenv("FEEDBACK_TOP_K_LENSES", "5"))
+FEEDBACK_MIN_STANCE = float(os.getenv("FEEDBACK_MIN_STANCE", "0.1"))
+FEEDBACK_NOVELTY_C = float(os.getenv("FEEDBACK_NOVELTY_C", "2.0"))
 
 # API tokens
 API_TOKEN = os.getenv("AUTOMEM_API_TOKEN")

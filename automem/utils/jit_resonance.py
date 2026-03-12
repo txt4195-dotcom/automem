@@ -1,8 +1,10 @@
 """JIT (Just-In-Time) stance scoring at recall time.
 
 When recall fetches candidate memories, some may not yet have stance
-scores (lor_culture, lor_polity, etc.). This module identifies those
-and scores them with nano before final ranking.
+scores (lor_culture_individualism_collectivism, etc.). This module
+identifies those and scores them with nano before final ranking.
+
+v5: Named properties per concept (not category arrays).
 """
 
 from __future__ import annotations
@@ -11,7 +13,11 @@ import logging
 import os
 from typing import Any, Dict, List
 
-from automem.utils.lens_concepts import CATEGORY_KEYS, lor_property_name
+from automem.utils.lens_concepts import (
+    ALL_LOR_PROPERTIES,
+    LOR_PROPERTY_NAMES,
+    lor_concept_property,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -20,11 +26,10 @@ JIT_BATCH_LIMIT = int(os.environ.get("JIT_RESONANCE_BATCH_LIMIT", "10"))
 
 
 def needs_scoring(memory: Dict[str, Any]) -> bool:
-    """Check if a memory is missing stance scores."""
-    for cat in CATEGORY_KEYS:
-        prop = lor_property_name(cat)
+    """Check if a memory is missing stance scores (named properties)."""
+    for prop in LOR_PROPERTY_NAMES:
         if memory.get(prop) is not None:
-            return False  # Has at least one category scored
+            return False  # Has at least one concept scored
     return True
 
 
@@ -54,7 +59,6 @@ def jit_score_candidates(
     if not unscored:
         return 0
 
-    # Limit batch size to avoid latency
     batch = unscored[:JIT_BATCH_LIMIT]
     scored = 0
 
@@ -68,11 +72,12 @@ def jit_score_candidates(
 
         lor_values = score_and_save(graph, memory_id, content)
         if lor_values is not None:
-            # Update in-place so scoring picks it up
-            for cat in CATEGORY_KEYS:
-                prop = lor_property_name(cat)
-                if cat in lor_values:
-                    mem[prop] = lor_values[cat]
+            # Update in-place: concept_name → lor_property_name on memory dict
+            for concept_name, lor in lor_values.items():
+                if concept_name.startswith("_"):
+                    continue
+                prop = lor_concept_property(concept_name)
+                mem[prop] = lor
             scored += 1
             logger.debug("JIT scored stance for %s", memory_id)
 
@@ -86,7 +91,7 @@ def hydrate_lor_from_graph(
     graph: Any,
     candidates: List[Dict[str, Any]],
 ) -> int:
-    """Fetch lor_* from FalkorDB and inject into candidate memory dicts.
+    """Fetch named lor_* from FalkorDB and inject into candidate memory dicts.
 
     Recall results come from Qdrant payload which doesn't include lor_*.
     This batch-fetches lor values from FalkorDB so compute_profile_score
@@ -97,7 +102,6 @@ def hydrate_lor_from_graph(
     if graph is None:
         return 0
 
-    # Collect IDs that are missing lor_*
     missing = []
     for c in candidates:
         mem = c.get("memory", c)
@@ -109,8 +113,8 @@ def hydrate_lor_from_graph(
     if not missing:
         return 0
 
-    # Batch fetch lor_* from FalkorDB
-    lor_props = ", ".join(f"m.{lor_property_name(cat)}" for cat in CATEGORY_KEYS)
+    # Batch fetch all named lor properties from FalkorDB
+    lor_props = ", ".join(f"m.{prop}" for prop in LOR_PROPERTY_NAMES)
     ids = [mid for mid, _ in missing]
 
     try:
@@ -130,21 +134,11 @@ def hydrate_lor_from_graph(
     lor_by_id: Dict[str, Dict[str, Any]] = {}
     for row in rows:
         mid = row[0]
-        lor_data = {}
-        for i, cat in enumerate(CATEGORY_KEYS):
+        lor_data: Dict[str, Any] = {}
+        for i, prop in enumerate(LOR_PROPERTY_NAMES):
             val = row[i + 1]
-            if val is not None:
-                # FalkorDB may return list or JSON string
-                if isinstance(val, list):
-                    lor_data[lor_property_name(cat)] = val
-                elif isinstance(val, (bytes, str)):
-                    import json as _json
-                    try:
-                        parsed = _json.loads(val)
-                        if isinstance(parsed, list):
-                            lor_data[lor_property_name(cat)] = parsed
-                    except (ValueError, TypeError):
-                        pass
+            if val is not None and isinstance(val, (int, float)):
+                lor_data[prop] = float(val)
         if lor_data:
             lor_by_id[mid] = lor_data
 
